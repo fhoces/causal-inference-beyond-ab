@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Causal Inference Beyond A/B Tests</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.55;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 2em; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5em 0; }
+  th, td { padding: 0.55em 0.8em; border-bottom: 1px solid #eee; text-align: left; }
+  th { background: #f6f8fa; }
+  td.num { width: 3em; color: #666; }
+  td.status { width: 7em; color: #888; font-size: 0.9em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .upcoming { color: #999; }
+  .small { font-size: 0.9em; color: #555; }
+  .banner { background: #fff3e0; border-left: 4px solid #e65100; padding: 0.8em 1em; margin: 1.5em 0; }
+</style>
+</head>
+<body>
+
+<h1>Causal Inference Beyond A/B Tests</h1>
+
+<p>
+A deep-dive companion to the
+<a href="../experimentation-refresher/">experimentation refresher</a>,
+expanding the three methods covered as a tour in that course's Module 8:
+modern difference-in-differences, synthetic control, and causal forests for
+heterogeneous treatment effects.
+</p>
+
+<div class="banner">
+  <strong>Status:</strong> in development. The learning plan is sketched;
+  modules are not yet built.
+</div>
+
+<h2>Modules</h2>
+
+<table>
+  <tr><th>#</th><th>Module</th><th>Status</th></tr>
+  <tr>
+    <td class="num upcoming">1</td>
+    <td class="upcoming">TWFE Diagnosed &mdash; Goodman-Bacon decomposition, the zoo of 2&times;2s, when TWFE is unbiased</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">2</td>
+    <td class="upcoming">Heterogeneity-Robust DiD &mdash; CS, SA, BJS, dCDH in detail</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">3</td>
+    <td class="upcoming">Honest DiD &mdash; sensitivity bounds for parallel trends</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">4</td>
+    <td class="upcoming">Synthetic Control &mdash; estimator, inference, augmented and generalized variants</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">5</td>
+    <td class="upcoming">Synthetic DiD &mdash; the bridge from SC to DiD</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">6</td>
+    <td class="upcoming">Causal Forest &mdash; honest splitting, asymptotic normality, GRF</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">7</td>
+    <td class="upcoming">Policy Learning &mdash; from &tau;&#770;(x) to deployment rules</td>
+    <td class="status">upcoming</td>
+  </tr>
+  <tr>
+    <td class="num upcoming">8</td>
+    <td class="upcoming">Matrix Completion &mdash; the modern panel toolbox</td>
+    <td class="status">upcoming</td>
+  </tr>
+</table>
+
+<h2>Stack</h2>
+
+<p class="small">
+R: <code>fixest</code>, <code>did</code>, <code>didimputation</code>,
+<code>DIDmultiplegt</code>, <code>HonestDiD</code>, <code>Synth</code>,
+<code>gsynth</code>, <code>synthdid</code>, <code>augsynth</code>,
+<code>grf</code>, <code>MCPanel</code>, plus tidyverse.
+</p>
+
+<h2>Source</h2>
+
+<p class="small">
+See <a href="learning-plan.md">learning-plan.md</a> for the module-by-module
+spec.
+</p>
+
+</body>
+</html>
