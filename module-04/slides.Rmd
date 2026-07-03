@@ -1,0 +1,1218 @@
+---
+title: "Module 4: Synthetic Control"
+subtitle: "Estimator, Inference, Augmented and Generalized Variants"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(quadprog)
+library(Synth)
+library(gsynth)
+library(augsynth)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r prop99-fit, include=FALSE}
+# Prop 99 data, wide matrix, from-scratch SC (V = I on pre-period outcome lags)
+data("california_prop99", package = "synthdid")
+cp <- california_prop99 |> mutate(State = as.character(State))
+wide <- cp |> select(State, Year, PacksPerCapita) |>
+  pivot_wider(names_from = State, values_from = PacksPerCapita) |> arrange(Year)
+years    <- wide$Year
+Ymat     <- as.matrix(wide[, -1])
+pre_idx  <- which(years <= 1988)
+post_idx <- which(years >  1988)
+donors   <- setdiff(colnames(Ymat), "California")
+
+sc_weights <- function(y1, Y0, idx, lambda = 1e-4) {
+  A <- Y0[idx, , drop = FALSE]; b <- y1[idx]; J <- ncol(Y0)
+  Dmat <- 2 * (t(A) %*% A + lambda * diag(J))
+  dvec <- 2 * as.numeric(t(A) %*% b)
+  Amat <- cbind(rep(1, J), diag(J)); bvec <- c(1, rep(0, J))
+  solve.QP(Dmat, dvec, Amat, bvec, meq = 1)$solution
+}
+y1 <- Ymat[, "California"]; Y0 <- Ymat[, donors, drop = FALSE]
+w_qp <- sc_weights(y1, Y0, pre_idx); names(w_qp) <- donors
+synth_qp <- as.numeric(Y0 %*% w_qp)
+gap_qp   <- y1 - synth_qp
+pre_rmspe_qp <- sqrt(mean(gap_qp[pre_idx]^2))
+att_qp   <- mean(gap_qp[post_idx])
+```
+
+```{r synth-fit, include=FALSE}
+ids <- cp |> distinct(State) |> arrange(State) |> mutate(id = row_number())
+d   <- cp |> left_join(ids, by = "State") |> as.data.frame()
+ca_id <- ids$id[ids$State == "California"]; donor_ids <- setdiff(ids$id, ca_id)
+pre_years <- 1970:1988
+dp <- dataprep(
+  foo = d, dependent = "PacksPerCapita", unit.variable = "id",
+  time.variable = "Year", unit.names.variable = "State",
+  special.predictors = lapply(pre_years, function(y) list("PacksPerCapita", y, "mean")),
+  treatment.identifier = ca_id, controls.identifier = donor_ids,
+  time.predictors.prior = pre_years, time.optimize.ssr = pre_years,
+  time.plot = 1970:2000)
+invisible(capture.output(so <- synth(dp, verbose = FALSE)))
+w_synth <- as.numeric(so$solution.w)
+names(w_synth) <- ids$State[match(rownames(so$solution.w), ids$id)]
+gap_synth <- as.numeric(dp$Y1plot) - as.numeric(dp$Y0plot %*% so$solution.w)
+gap_cor <- cor(gap_qp, gap_synth)
+```
+
+```{r placebo-space, include=FALSE}
+placebo_ratio <- function(nm) {
+  yy <- Ymat[, nm]; DD <- Ymat[, setdiff(colnames(Ymat), nm), drop = FALSE]
+  w  <- sc_weights(yy, DD, pre_idx); g <- yy - as.numeric(DD %*% w)
+  pre_r <- sqrt(mean(g[pre_idx]^2)); post_r <- sqrt(mean(g[post_idx]^2))
+  tibble(state = nm, pre_rmspe = pre_r, post_rmspe = post_r,
+         ratio = post_r / pre_r, gaps = list(g))
+}
+placebos <- map_dfr(colnames(Ymat), placebo_ratio)
+ca_ratio <- placebos$ratio[placebos$state == "California"]
+rank_ca  <- sum(placebos$ratio >= ca_ratio)
+p_value  <- rank_ca / nrow(placebos)
+```
+
+```{r rideshare, include=FALSE}
+# Factor-structure ride-share panel: 1 treated + 20 donor cities, 48 months,
+# 2 latent factors, airport-pickup policy at month 36. True effect = 1.5.
+make_rideshare <- function(seed = 6, n_donor = 20, n_t = 48, t_treat = 36,
+                           effect = 1.5, noise = 0.35, treat_shift = 1.2) {
+  set.seed(seed); n_units <- n_donor + 1; r <- 2
+  F_t <- cbind(cumsum(rnorm(n_t, 0, 0.3)) + sin((1:n_t) / 6),
+               cumsum(rnorm(n_t, 0, 0.2)))
+  L <- matrix(rnorm(n_units * r, 0, 1), n_units, r)
+  L[1, ] <- L[1, ] + treat_shift            # treated city near the hull edge
+  mu_i <- rnorm(n_units, 8, 1); gamma_t <- 0.02 * (1:n_t)
+  units <- tibble(city = 1:n_units, treated_unit = c(TRUE, rep(FALSE, n_donor)))
+  expand_grid(city = 1:n_units, month = 1:n_t) |> left_join(units, by = "city") |>
+    mutate(post = month >= t_treat, D = as.integer(treated_unit & post),
+           y0 = mu_i[city] + gamma_t[month] + rowSums(L[city, ] * F_t[month, ]) +
+                rnorm(n(), 0, noise),
+           y  = y0 + effect * D)
+}
+rp <- make_rideshare(); truth <- 1.5; d_rp <- as.data.frame(rp)
+
+gs <- suppressMessages(gsynth(y ~ D, data = d_rp, index = c("city", "month"),
+        force = "two-way", CV = TRUE, r = c(0, 4), se = TRUE, nboots = 200,
+        inference = "parametric", parallel = FALSE))
+asyn <- augsynth(y ~ D, unit = city, time = month, data = d_rp,
+                 progfunc = "Ridge", scm = TRUE)
+att_ascm <- summary(asyn)$average_att$Estimate
+
+# plain SC on the same panel
+rwide <- rp |> select(city, month, y) |>
+  pivot_wider(names_from = city, values_from = y) |> arrange(month)
+RY <- as.matrix(rwide[, -1]); rpre <- which(rwide$month < 36); rpost <- which(rwide$month >= 36)
+w_rp <- sc_weights(RY[, 1], RY[, -1], rpre)
+att_sc_rp <- mean((RY[, 1] - as.numeric(RY[, -1] %*% w_rp))[rpost])
+
+est_tbl <- tibble(
+  method = factor(c("Plain SC", "Augmented SC", "gsynth"),
+                  levels = c("Plain SC", "Augmented SC", "gsynth")),
+  est = c(att_sc_rp, att_ascm, gs$est.avg[1]),
+  lo  = c(NA, NA, gs$est.avg[3]), hi = c(NA, NA, gs$est.avg[4]))
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td><b>4</b></td><td><b>Synthetic Control: Estimator, Inference, Variants</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+The tour showed synthetic control as a convex combination of donors fit by
+`solve.QP`. This module gives the estimator formally and the two variants a
+practitioner actually chooses between.
+
+--
+
+**You will be able to:**
+
+1. Write the Abadie-Diamond-Hainmueller estimator, including the nested V-matrix
+   optimization, and say why the no-intercept and simplex constraints matter.
+2. Run placebo-in-space with the RMSPE-ratio statistic and compute an exact
+   permutation p-value; run placebo-in-time; describe conformal SC.
+3. Explain augmented SC (bias correction) and generalized SC (interactive fixed
+   effects), and pick between SC, ASCM, and gsynth for a given panel.
+
+--
+
+**Applications:** California Prop 99 (canonical, built from scratch and checked
+against `Synth`), then a ride-share single-city policy on a simulated factor
+panel where `gsynth` and `augsynth` earn their keep.
+
+---
+
+name: motivation-main
+
+# When You Have One Treated Unit
+
+California passed Proposition 99 in 1989 (cigarette tax plus anti-smoking
+programs). No other state did the same thing at the same time. Build a
+counterfactual California from the 38 states that did not.
+
+```{r motiv-plot, echo=FALSE, fig.height=4.2}
+cp |> mutate(grp = if_else(State == "California", "California", "Donor states")) |>
+  ggplot(aes(Year, PacksPerCapita, group = State, color = grp, linewidth = grp)) +
+  geom_line(alpha = 0.7) +
+  geom_vline(xintercept = 1989, linetype = "dashed", color = "grey40") +
+  annotate("text", x = 1989, y = 40, label = "Prop 99", hjust = -0.1, size = 3.5) +
+  scale_color_manual(values = c("California" = "firebrick", "Donor states" = "grey65")) +
+  scale_linewidth_manual(values = c("California" = 1.3, "Donor states" = 0.4), guide = "none") +
+  labs(x = NULL, y = "Packs per capita", color = NULL) +
+  theme(legend.position = "top")
+```
+
+No single state matches California. A convex combination of several might.
+
+---
+
+name: adh-est-main
+
+# The Abadie-Diamond-Hainmueller Estimator
+
+Unit 1 is treated, units $2,\dots,J{+}1$ are donors. Stack $k$ predictors into
+$X_1$ (treated, $k \times 1$) and $X_0$ (donors, $k \times J$). Choose weights
+
+$$W^*(V) = \arg\min_{W}\; (X_1 - X_0 W)'\, V\, (X_1 - X_0 W)
+\quad \text{s.t.}\quad w_j \ge 0,\; \textstyle\sum_j w_j = 1.$$
+
+--
+
+.pull-left[
+**The two constraints define SC.**
+
+- $w_j \ge 0$ and $\sum w_j = 1$: the synthetic unit is a weighted average, so
+  it lives *inside the convex hull* of the donors. No extrapolation.
+]
+
+.pull-right[
+**No intercept.**
+
+Unlike DiD or regression, SC has no additive shift. Donors must reproduce the
+*level* of the treated unit. That is why pre-fit is the load-bearing diagnostic.
+]
+
+--
+
+.highlight-box[
+$V$ is a diagonal matrix of predictor importances. Fix $V = I$ and this is one
+quadratic program. Optimize $V$ and it becomes a nested program (next slide).
+]
+
+<a href="#adh-qp" class="nav-btn">QP form</a>
+<a href="#adh-derivation" class="nav-btn-br">the solve.QP mapping</a>
+
+---
+
+name: vmatrix-main
+
+# The V-Matrix: A Nested Optimization
+
+The inner problem gives $W^*(V)$ for a fixed $V$. The outer problem chooses $V$
+to minimize the pre-treatment fit of the *outcome*:
+
+$$V^* = \arg\min_{V}\; \big(Z_1 - Z_0\, W^*(V)\big)'\big(Z_1 - Z_0\, W^*(V)\big)$$
+
+where $Z_1, Z_0$ are pre-period outcome paths. Every candidate $V$ requires
+re-solving the inner QP: a bilevel program.
+
+--
+
+.blue-box[
+**Why bother?** $V$ decides which predictors the match prioritizes. With
+predictors on different scales (income in dollars, prices in cents, a few
+outcome lags), equal weighting is arbitrary and $V^*$ matters a lot.
+]
+
+--
+
+.small[
+When the predictors are *only* outcome lags, all on one scale, the optimal $V^*$
+is near a scaled identity. We will see this directly on Prop 99: the hand-rolled
+$V = I$ fit and the `Synth` fit that optimizes $V$ are nearly identical.
+]
+
+<a href="#vmatrix-detail" class="nav-btn">nested-optimization detail</a>
+
+---
+
+name: hull-main
+
+# Interpolation, Not Extrapolation
+
+The simplex constraint means the synthetic unit can only reach outcome levels
+*inside* the convex hull of the donors.
+
+--
+
+.pull-left[
+**If the treated unit is interior** to the hull, SC fits it well and the
+counterfactual is a genuine interpolation.
+]
+
+.pull-right[
+**If the treated unit is extreme** (outside the hull), no convex combination
+reaches it. Pre-fit is imperfect *by construction*, and the residual imbalance
+biases the estimate.
+]
+
+--
+
+.highlight-box[
+SC's refusal to extrapolate is a feature: a bad pre-fit is an honest signal the
+donor pool cannot reconstruct the treated unit. Augmented SC (later) buys a bias
+correction by *allowing* controlled extrapolation, trading the guarantee for
+lower bias.
+]
+
+<a href="#hull-detail" class="nav-btn">convex-hull picture</a>
+
+---
+
+name: prop99-main
+
+# Prop 99 From Scratch
+
+$V = I$ on the 19 pre-period outcome lags; one quadratic program.
+
+.pull-left[
+.small[
+```{r prop99-show, eval=FALSE}
+A <- Y0[pre_idx, ]; b <- y1[pre_idx]
+J <- ncol(Y0)
+# min ||A w - b||^2  s.t. w >= 0, sum w = 1
+Dmat <- 2 * (t(A) %*% A + 1e-4 * diag(J))
+dvec <- 2 * as.numeric(t(A) %*% b)
+Amat <- cbind(rep(1, J), diag(J))
+bvec <- c(1, rep(0, J))
+w <- solve.QP(Dmat, dvec, Amat, bvec,
+              meq = 1)$solution
+```
+]
+]
+
+.pull-right[
+```{r prop99-weights, echo=FALSE}
+tibble(Donor = names(w_qp), Weight = round(w_qp, 3)) |>
+  filter(Weight > 0.01) |> arrange(desc(Weight)) |>
+  knitr::kable(format = "html")
+```
+
+.small[
+Pre-RMSPE `r round(pre_rmspe_qp, 2)` packs against a pre-period mean near 110:
+an excellent fit. Five donors carry all the weight.
+]
+]
+
+<a href="#prop99-dgp" class="nav-btn">reshape code</a>
+
+---
+
+# Observed vs Synthetic California
+
+```{r prop99-cf, echo=FALSE, fig.height=4.6}
+tibble(Year = years, California = y1, Synthetic = synth_qp) |>
+  pivot_longer(-Year) |>
+  ggplot(aes(Year, value, color = name, linetype = name)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 1989, linetype = "dashed", color = "grey50") +
+  annotate("text", x = 1989, y = 45, label = "Prop 99", hjust = -0.1, size = 3.5) +
+  scale_color_manual(values = c("California" = "firebrick", "Synthetic" = "steelblue")) +
+  scale_linetype_manual(values = c("California" = "solid", "Synthetic" = "dashed")) +
+  labs(x = NULL, y = "Packs per capita", color = NULL, linetype = NULL) +
+  theme(legend.position = "top")
+```
+
+The two paths track tightly through 1988, then California falls away. The gap is
+the estimated effect.
+
+---
+
+name: gap-main
+
+# The Gap and the ATT
+
+```{r prop99-gap, echo=FALSE, fig.height=3.6}
+tibble(Year = years, gap = gap_qp) |>
+  ggplot(aes(Year, gap)) +
+  geom_hline(yintercept = 0, color = "grey60") +
+  geom_vline(xintercept = 1989, linetype = "dashed", color = "grey50") +
+  geom_line(linewidth = 1.2, color = "firebrick") +
+  annotate("text", x = 1994, y = -12,
+           label = sprintf("mean post gap = %.1f packs", att_qp), size = 4) +
+  labs(x = NULL, y = "California minus synthetic")
+```
+
+Average post-1989 effect: **`r round(att_qp, 1)` packs per capita**, widening
+over time as the tax and programs compound. Pre-period gap hovers at zero, which
+is exactly what the weights were fit to do.
+
+---
+
+name: synth-pkg-main
+
+# Does Optimizing V Change the Answer?
+
+`Synth::synth()` runs the full nested V-optimization over the same 19 outcome
+lags as `special.predictors`.
+
+```{r synth-cmp, echo=FALSE}
+tibble(Donor = donors, `V = I (scratch)` = round(w_qp, 3),
+       `Synth (optimized V)` = round(w_synth[donors], 3)) |>
+  filter(`V = I (scratch)` > 0.01 | `Synth (optimized V)` > 0.01) |>
+  arrange(desc(`V = I (scratch)`)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+Weights agree to within 0.003; the two gap series correlate **`r round(gap_cor, 3)`**.
+With outcome-lag predictors on one scale, the optimized $V^*$ lands near the
+identity, so the nested search barely moves the estimate. V-optimization earns
+its keep only with heterogeneous predictors.
+]
+
+<a href="#synth-dataprep" class="nav-btn">dataprep code</a>
+
+---
+
+name: donor-main
+
+# Choosing the Donor Pool
+
+The pool is an assumption, not a convenience sample.
+
+.small[
+| Criterion | Why | Prop 99 example |
+|---|---|---|
+| Same outcome-driving structure | Lets the pre-match extend to a post counterfactual | states with similar smoking dynamics |
+| No spillovers | A contaminated donor biases the counterfactual | exclude states with cross-border cigarette runs |
+| No concurrent shocks | A donor with its own 1990 tax change is not clean | drop states that passed their own controls |
+| Screen bad pre-fitters | Poorly-fit donors add noise to placebo inference | trim on pre-RMSPE |
+]
+
+--
+
+.blue-box[
+Abadie's discipline: a *small, defensible* pool beats a large one. Every donor
+you add is a claim that it shares the treated unit's untreated trajectory. Report
+sensitivity to dropping high-weight donors.
+]
+
+---
+
+name: prefit-main
+
+# The Pre-Fit Rule
+
+$$\text{RMSPE}_{\text{pre}} = \sqrt{\tfrac{1}{T_0}\textstyle\sum_{t \le T_0}
+\big(Y_{1t} - \sum_j \hat w_j Y_{jt}\big)^2}$$
+
+is exactly the objective the weights minimize, so it is the best the pool can do.
+
+--
+
+.highlight-box[
+**Abadie's rule:** if $\text{RMSPE}_{\text{pre}}$ is large relative to the
+treated unit's pre-period outcome scale, do not report the SC estimate. The
+synthetic is not tracking the treated unit, so any post-period gap could be fit
+error spilling forward rather than a treatment effect.
+]
+
+--
+
+Fixes when the pre-fit is bad: expand the donor pool, lengthen the pre-period,
+switch to synthetic DiD (Module 5, which allows an intercept shift), or move to a
+different design. On Prop 99 the pre-RMSPE is `r round(pre_rmspe_qp, 2)`, far
+below the outcome scale: the fit is trustworthy.
+
+---
+
+name: placebo-space-main
+
+# Inference Without Standard Errors
+
+One treated unit means no sampling distribution. Use permutation:
+**placebo-in-space**. Re-run SC pretending each donor is treated, against the
+rest. For each unit form the ratio
+
+$$r_i = \frac{\text{RMSPE}_{\text{post},i}}{\text{RMSPE}_{\text{pre},i}}$$
+
+which normalizes post-period divergence by pre-period fit quality.
+
+--
+
+The exact permutation p-value is the treated unit's rank in the ratio
+distribution:
+
+$$p = \frac{\#\{i : r_i \ge r_{\text{treated}}\}}{J+1}.$$
+
+--
+
+.blue-box[
+The *ratio*, not the raw gap, is the statistic: a donor that fits poorly
+pre-period will diverge post-period for reasons unrelated to treatment. Dividing
+by the pre-RMSPE penalizes exactly that.
+]
+
+<a href="#placebo-dgp" class="nav-btn">placebo loop code</a>
+
+---
+
+name: placebo-plot-main
+
+# Placebo-in-Space: California vs the Cloud
+
+```{r placebo-plot, echo=FALSE, fig.height=3.8}
+gap_long <- placebos |>
+  mutate(is_ca = state == "California") |>
+  select(state, is_ca, gaps) |> unnest_longer(gaps) |>
+  group_by(state) |> mutate(Year = years) |> ungroup()
+ggplot(gap_long, aes(Year, gaps, group = state, color = is_ca, linewidth = is_ca)) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_vline(xintercept = 1989, linetype = "dashed", color = "grey50") +
+  geom_line(alpha = 0.7) +
+  scale_color_manual(values = c("FALSE" = "grey75", "TRUE" = "firebrick"), guide = "none") +
+  scale_linewidth_manual(values = c("FALSE" = 0.4, "TRUE" = 1.3), guide = "none") +
+  labs(x = NULL, y = "Gap (unit minus synthetic)")
+```
+
+California (red) ratio = **`r round(ca_ratio, 1)`**, rank **`r rank_ca` of `r nrow(placebos)`**,
+exact **p = `r round(p_value, 3)`**. Two never-treated states rank higher: both
+fit almost perfectly pre-period, then drift by chance, a reminder that a moderate
+pool gives the test limited power.
+
+---
+
+name: trim-main
+
+# Trimming Bad Pre-Fitters
+
+Abadie screens placebos whose pre-RMSPE is much larger than the treated unit's:
+a state the pool cannot fit is not a fair comparison.
+
+```{r trim-tbl, echo=FALSE}
+ca_pre <- placebos$pre_rmspe[placebos$state == "California"]
+placebos |>
+  mutate(kept_2x = pre_rmspe <= 2 * ca_pre) |>
+  summarise(`States` = n(),
+            `Kept (pre-RMSPE <= 2x CA)` = sum(kept_2x),
+            `Dropped` = sum(!kept_2x)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+Here trimming does not change California's rank: the two states above it
+(Missouri, Virginia) are themselves *well* fit, so the screen only removes
+low-ratio, poorly-fit states. The famous rank-one Prop 99 result uses economic
+covariates and an optimized $V$, not outcome lags alone. Same method, different
+predictor set, different power.
+]
+
+---
+
+name: placebo-time-main
+
+# Placebo-in-Time (Backdating)
+
+Assign a *fake* treatment date inside the pre-period, refit on data before it,
+and inspect the gap up to the real date. A large pseudo-effect undermines the
+design.
+
+```{r backdate, echo=FALSE, fig.height=3.4}
+fake_pre <- which(years <= 1979)
+w_bd <- sc_weights(y1, Y0, fake_pre); gap_bd <- y1 - as.numeric(Y0 %*% w_bd)
+pseudo <- mean(gap_bd[years >= 1980 & years <= 1988]); real <- mean(gap_bd[years > 1988])
+tibble(Year = years, gap = gap_bd) |>
+  ggplot(aes(Year, gap)) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_vline(xintercept = c(1980, 1989), linetype = c("dotted", "dashed")) +
+  geom_line(linewidth = 1.1, color = "darkorange") +
+  annotate("text", x = 1980, y = -15, label = "fake date", hjust = -0.05, size = 3.3) +
+  annotate("text", x = 1989, y = -15, label = "real date", hjust = -0.05, size = 3.3) +
+  labs(x = NULL, y = "California minus synthetic")
+```
+
+Fitting on 1970-1979, the 1980-1988 pseudo-effect is `r round(pseudo, 1)` packs,
+about one-sixth of the real `r round(real, 1)`. The big divergence appears only
+after 1989.
+
+---
+
+name: conformal-main
+
+# Conformal Inference (Conceptual)
+
+Chernozhukov, Wuthrich and Zhu (2021) give a model-free alternative to
+placebo permutation.
+
+--
+
+.blue-box[
+**The idea.** Under a sharp null of no effect, the post-period SC residuals
+should be *exchangeable* with the pre-period residuals. Permute (or block-permute)
+residuals across time, and invert the test to a confidence interval for the
+entire effect path.
+]
+
+--
+
+- Delivers pointwise and joint confidence bands with finite-sample validity
+  under the exchangeability assumption.
+- Does **not** need a large donor pool, unlike placebo-in-space.
+- The method to reach for when the pool is too small for a credible permutation
+  distribution. Implemented in `scinference`.
+
+We describe it; the exercise uses placebo-in-space, which the Prop 99 pool
+supports.
+
+<a href="#conformal-detail" class="nav-btn">exchangeability detail</a>
+
+---
+
+name: ascm-main
+
+# Augmented Synthetic Control
+
+Ben-Michael, Feller and Rothstein (2021) attack SC's residual imbalance
+directly. When SC cannot fit perfectly, the leftover
+$X_1 - X_0 \hat W^{\text{scm}}$ biases the estimate. Correct it with an outcome
+model:
+
+$$\hat Y_{1T}(0) = \sum_j \hat w_j^{\text{scm}} Y_{jT} + \big(X_1 - X_0 \hat W^{\text{scm}}\big)'\, \hat\eta$$
+
+where $\hat\eta$ is a ridge regression of donor post-outcomes on donor
+pre-predictors.
+
+--
+
+.pull-left[
+.highlight-box[
+**Perfect pre-fit** makes the imbalance zero, so ASCM $=$ SC. The correction only
+fires when SC leaves imbalance on the table.
+]
+]
+
+.pull-right[
+.blue-box[
+**It permits extrapolation.** The correction can push implied weights outside
+the simplex (negative weights), reaching a treated unit outside the hull. Ridge
+controls how much.
+]
+]
+
+<a href="#ascm-detail" class="nav-btn">estimator detail</a>
+
+---
+
+name: gsynth-main
+
+# Generalized SC: Interactive Fixed Effects
+
+Xu (2017) embeds SC in a factor model:
+
+$$Y_{it} = x_{it}'\beta + \lambda_i' f_t + \alpha_i + \xi_t + \varepsilon_{it}$$
+
+Two-way FE assumes the only time structure is a common shock $\xi_t$. The
+interactive term $\lambda_i' f_t$ lets units load differently on $r$ latent
+factors (a demand shock that hits dense cities harder).
+
+--
+
+.small[
+1. Estimate $\beta$, factors $F$, and control loadings on the **control units**
+   only (Bai 2009 IFE estimator).
+2. Estimate each treated unit's loadings $\hat\lambda_i$ from its **pre-treatment**
+   residuals on $\hat F$.
+3. Impute $\hat Y_{it}(0) = x_{it}'\hat\beta + \hat\lambda_i'\hat f_t$; average
+   $Y_{it} - \hat Y_{it}(0)$ over treated post cells.
+4. Choose $r$ by cross-validation; bootstrap for inference.
+]
+
+--
+
+.highlight-box[
+gsynth generalizes SC: instead of matching factor loadings with convex weights,
+it estimates the loadings directly. It handles multiple treated units,
+covariates, and extrapolation.
+]
+
+<a href="#gsynth-detail" class="nav-btn">estimation detail</a>
+
+---
+
+name: rideshare-main
+
+# Application 2: A Ride-Share Factor Panel
+
+One treated city, 20 donor cities, 48 months. Outcomes are driven by two latent
+factors with city-specific loadings; an airport-pickup policy hits the treated
+city at month 36 with a true effect of **`r truth`**. The treated city's loadings
+sit near the *edge* of the donor hull, so plain SC will struggle.
+
+```{r rideshare-plot, echo=FALSE, fig.height=3.6}
+rp |> mutate(grp = if_else(treated_unit, "Treated city", "Donor cities")) |>
+  ggplot(aes(month, y, group = city, color = grp, linewidth = grp)) +
+  geom_line(alpha = 0.7) +
+  geom_vline(xintercept = 36, linetype = "dashed", color = "grey40") +
+  annotate("text", x = 36, y = min(rp$y), label = "policy", hjust = -0.1, size = 3.3) +
+  scale_color_manual(values = c("Treated city" = "firebrick", "Donor cities" = "grey70")) +
+  scale_linewidth_manual(values = c("Treated city" = 1.3, "Donor cities" = 0.4), guide = "none") +
+  labs(x = "Month", y = "Rides index", color = NULL) +
+  theme(legend.position = "top")
+```
+
+<a href="#rideshare-dgp" class="nav-btn">factor DGP code</a>
+
+---
+
+name: gsynth-fit-main
+
+# gsynth Recovers the Factors
+
+```{r gsynth-cf, echo=FALSE, fig.height=4.0}
+treated_obs <- rp |> filter(treated_unit) |> arrange(month) |> pull(y)
+gs_cf <- treated_obs - as.numeric(gs$att)      # observed minus per-period ATT
+tibble(month = 1:48, Observed = treated_obs, Counterfactual = gs_cf) |>
+  pivot_longer(-month) |>
+  ggplot(aes(month, value, color = name, linetype = name)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = 36, linetype = "dashed", color = "grey50") +
+  scale_color_manual(values = c("Observed" = "firebrick", "Counterfactual" = "steelblue")) +
+  scale_linetype_manual(values = c("Observed" = "solid", "Counterfactual" = "dashed")) +
+  labs(x = "Month", y = "Rides index", color = NULL, linetype = NULL) +
+  theme(legend.position = "top")
+```
+
+Cross-validation picks **r = `r gs$r.cv`** (the true number of factors). Estimated
+ATT **`r round(gs$est.avg[1], 2)`**, 95% CI
+[`r round(gs$est.avg[3], 2)`, `r round(gs$est.avg[4], 2)`], which covers the
+truth of `r truth`.
+
+---
+
+name: compare-main
+
+# SC vs ASCM vs gsynth vs Truth
+
+```{r compare-plot, echo=FALSE, fig.height=2.9}
+ggplot(est_tbl, aes(method, est, color = method)) +
+  geom_hline(yintercept = truth, linetype = "dashed", color = "grey40") +
+  geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.15, na.rm = TRUE) +
+  geom_point(size = 5) +
+  annotate("text", x = 0.6, y = truth + 0.2, label = "truth = 1.5", size = 3.6, hjust = 0) +
+  scale_color_manual(values = c("Plain SC" = "grey45", "Augmented SC" = "#e65100",
+                                "gsynth" = "#1565c0"), guide = "none") +
+  labs(x = NULL, y = "Estimated ATT") + coord_cartesian(ylim = c(0, 3.6))
+```
+
+.tiny[
+| Estimator | ATT | Error vs truth | Why |
+|---|---|---|---|
+| Plain SC | `r round(att_sc_rp, 2)` | `r sprintf("%+.2f", att_sc_rp - truth)` | treated unit outside the hull; convex weights cannot reach it |
+| Augmented SC | `r round(att_ascm, 2)` | `r sprintf("%+.2f", att_ascm - truth)` | ridge correction removes most of the imbalance bias |
+| gsynth | `r round(gs$est.avg[1], 2)` | `r sprintf("%+.2f", gs$est.avg[1] - truth)` | models the two factors directly; CI covers truth |
+]
+
+---
+
+name: decision-main
+
+# Which Estimator, When
+
+.small[
+| Situation | Reach for | Why |
+|---|---|---|
+| Good pre-fit, treated unit interior to hull | **Plain SC** | interpretable convex weights, no extrapolation, minimal assumptions |
+| Good but imperfect pre-fit | **Augmented SC** | keeps SC interpretability, removes first-order imbalance bias |
+| Low-rank panel, long pre-period, treated near/outside hull | **gsynth** | estimates factor loadings directly, extrapolates, handles covariates |
+| Multiple treated units, staggered adoption | **gsynth** | native support; SC is one-unit-at-a-time |
+| Small donor pool (weak placebo distribution) | **conformal SC** | valid inference without a large permutation cloud |
+| Want an intercept shift / robustness to pre-fit | **synthetic DiD** | Module 5 |
+]
+
+--
+
+.blue-box[
+Default in interviews: "Plain SC if pre-fit is clean and the unit is interior;
+augmented SC to bias-correct imperfect fit; gsynth when the panel is low-rank and
+I need to extrapolate or handle multiple treated units."
+]
+
+---
+
+name: m4-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "Walk me through the synthetic control estimator." | Convex weights on donors minimizing pre-treatment predictor imbalance under $w_j \ge 0$, $\sum w_j = 1$, no intercept; $V$ weights predictors and is chosen by an outer loop minimizing pre-period outcome fit. |
+| "Pre-fit RMSPE is large relative to the outcome scale. What now?" | Do not report the SC estimate; the counterfactual is not tracking the treated unit. Expand the pool, lengthen the pre-period, switch to synthetic DiD or gsynth, or change the design. |
+| "How do you do inference with one treated unit?" | Placebo-in-space: assign treatment to each donor, form the post/pre RMSPE ratio, exact p = rank/(J+1). Back it with placebo-in-time (backdating). Conformal SC for small pools. |
+| "When would you use augmented SC over plain SC?" | Pre-fit is good but imperfect. ASCM adds an outcome-model bias correction for the residual imbalance; equals SC when pre-fit is perfect; allows controlled extrapolation via ridge. |
+| "What does gsynth buy you over SC?" | An interactive-fixed-effects model: estimate latent factors on controls, project treated loadings, impute the counterfactual. Handles multiple treated units, covariates, and units outside the donor hull; CV picks the factor count. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Abadie, Diamond and Hainmueller (2010, 2015) | The estimator, the V-matrix, placebo-in-space and placebo-in-time inference on Prop 99. |
+| Abadie (2021), *JEL* | Practitioner's guide: donor-pool discipline, when SC is feasible, the no-extrapolation logic. |
+| Ben-Michael, Feller and Rothstein (2021), *JASA* | Augmented SC: outcome-model bias correction, the extrapolation-vs-bias tradeoff. |
+| Xu (2017), *Political Analysis* | Generalized SC / interactive fixed effects; CV factor selection; multiple treated units. |
+| Chernozhukov, Wuthrich and Zhu (2021), *JASA* | Conformal inference for SC: exchangeability-based bands, no large pool needed. |
+]
+
+**Next module:** synthetic DiD (Arkhangelsky et al. 2021), which adds *time*
+weights and an intercept to bridge SC and DiD.
+
+**Drill:** `exercise.R` builds SC from scratch on Prop 99, matches `Synth` to a
+gap correlation of 1.00, and runs the full placebo-in-space and backdating tests.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: adh-qp
+
+# Backup: SC as a Quadratic Program
+
+.small[
+`solve.QP` minimizes $\frac{1}{2} w' D w - d' w$ subject to $A' w \ge b$, with the
+first `meq` constraints treated as equalities. Map the SC inner problem
+(with $V = I$) onto it:
+
+$$\min_w \|A w - b\|^2 = \min_w\; w'(A'A)w - 2(A'b)'w
+\;\Rightarrow\; D = 2 A'A,\;\; d = 2 A'b$$
+
+```{r adh-qp-show, eval=FALSE}
+A <- Y0[pre_idx, ]; b <- y1[pre_idx]; J <- ncol(Y0)
+Dmat <- 2 * (t(A) %*% A + 1e-4 * diag(J))  # ridge -> strictly PD
+dvec <- 2 * as.numeric(t(A) %*% b)
+Amat <- cbind(rep(1, J), diag(J))          # col 1: sum w = 1 (equality)
+bvec <- c(1, rep(0, J))                     # cols 2..: w_j >= 0
+w <- solve.QP(Dmat, dvec, Amat, bvec, meq = 1)$solution
+```
+
+With 38 donors and 19 pre-years, $A'A$ is rank-deficient (rank $\le 19$), so
+`solve.QP`'s Cholesky needs a small ridge to make $D$ positive definite and the
+solution unique and deterministic. The simplex constraints do the real
+regularizing: the optimum is a sparse vertex, five non-zero weights here.
+]
+
+<a href="#adh-est-main" class="nav-btn-br">← back</a>
+
+---
+
+name: adh-derivation
+
+# Backup: Where the QP Comes From
+
+.small[
+The general ADH objective with predictor-importance matrix $V$ is
+
+$$\min_W\; (X_1 - X_0 W)' V (X_1 - X_0 W)
+= \min_W\; W'(X_0' V X_0)W - 2(X_0' V X_1)'W + \text{const}.$$
+
+Matching to `solve.QP`'s $\frac{1}{2}w'Dw - d'w$ gives
+
+$$D = 2\, X_0' V X_0, \qquad d = 2\, X_0' V X_1.$$
+
+Setting $V = I$ and using the pre-period outcome lags as the predictors, so that
+$X_0$ is the donor pre-period matrix and $X_1$ the treated pre-period path,
+recovers the code on the previous backup. The equality constraint $\mathbf{1}'W = 1$ is row one of `Amat`
+with `meq = 1`; the $J$ non-negativity constraints $w_j \ge 0$ are the identity
+block. `Synth` replaces the fixed $V$ with the nested search and uses an
+interior-point solver (`ipop` / `LowRankQP`) that tolerates the rank deficiency
+without an explicit ridge.
+]
+
+<a href="#adh-est-main" class="nav-btn-br">← back</a>
+
+---
+
+name: vmatrix-detail
+
+# Backup: The Nested Optimization
+
+.small[
+The program is bilevel:
+
+$$\underbrace{V^* = \arg\min_V \|Z_1 - Z_0 W^*(V)\|^2}_{\text{outer: fit the outcome}}
+\quad\text{where}\quad
+\underbrace{W^*(V) = \arg\min_{W \in \Delta} (X_1 - X_0 W)'V(X_1 - X_0 W)}_{\text{inner: fit the predictors}}$$
+
+with $\Delta$ the simplex. Each outer evaluation solves the inner QP. `Synth`
+optimizes $V$ over the space of diagonal PSD matrices (normalized so predictors
+enter comparably) by a derivative-free search (Nelder-Mead / `optim`), starting
+from a regression-based or equal-weight $V$.
+
+**Why it can matter.** $V$ is a similarity metric on predictors. If income
+(dollars) and price (cents) enter with equal weight, the dollar-scale predictor
+dominates the match mechanically. $V^*$ rescales so the *outcome-relevant*
+predictors drive the weights.
+
+**Why it barely moved on Prop 99.** The predictors were all the same variable
+(packs) at different years, already on one scale, so any reasonable $V$ (including
+$I$) gives nearly the same $W$. The `solution.v` from `Synth` is close to uniform
+across the 19 lags. This is the exception, not the rule: with genuine covariates,
+skip $V = I$.
+]
+
+<a href="#vmatrix-main" class="nav-btn-br">← back</a>
+
+---
+
+name: hull-detail
+
+# Backup: The Convex Hull, Concretely
+
+.small[
+Think of each unit's pre-period outcome path as a point in $T_0$ dimensions.
+The synthetic control is a convex combination of the donor points, so it
+can only land inside their convex hull.
+
+- **Treated unit interior:** some convex combination reaches it, pre-RMSPE can be
+  near zero, and the same weights plausibly reconstruct the untreated
+  counterfactual. This is the good case.
+- **Treated unit on a vertex / outside:** the closest point in the hull is on its
+  boundary, pre-RMSPE is bounded away from zero, and SC systematically over- or
+  under-shoots. California smoked *less* per capita than almost every donor even
+  pre-1989, which is why the fit, though good, is not perfect.
+
+Two consequences ADH stress:
+
+1. **No extrapolation** means SC never predicts an outcome no donor exhibited: a
+   safety property regression lacks.
+2. **Interpolation bias** is the price: when the unit is extreme, the convex
+   constraint injects bias that augmented SC (allowing weights off the simplex)
+   or gsynth (modeling the loadings) can remove.
+]
+
+<a href="#hull-main" class="nav-btn-br">← back</a>
+
+---
+
+name: prop99-dgp
+
+# Backup: Reshaping Prop 99
+
+.small[
+```{r prop99-dgp-show, eval=FALSE}
+data("california_prop99", package = "synthdid")
+cp <- california_prop99 |> mutate(State = as.character(State))
+
+# wide: rows = years, columns = states (a T x N outcome matrix)
+wide <- cp |> select(State, Year, PacksPerCapita) |>
+  pivot_wider(names_from = State, values_from = PacksPerCapita) |>
+  arrange(Year)
+years    <- wide$Year
+Ymat     <- as.matrix(wide[, -1])       # 31 years x 39 states
+pre_idx  <- which(years <= 1988)         # 19 pre-treatment years
+post_idx <- which(years >  1988)         # 12 post years
+donors   <- setdiff(colnames(Ymat), "California")   # 38 donors
+
+y1 <- Ymat[, "California"]               # treated outcome path
+Y0 <- Ymat[, donors, drop = FALSE]       # donor outcome matrix
+```
+
+The whole method runs off this one matrix: `sc_weights(y1, Y0, pre_idx)` for the
+fit, and the same call with each column swapped in as treated for the placebo
+test.
+]
+
+<a href="#prop99-main" class="nav-btn-br">← back</a>
+
+---
+
+name: synth-dataprep
+
+# Backup: The Synth dataprep Call
+
+.small[
+`Synth` wants a plain `data.frame`, numeric unit ids, and predictors specified as
+operations. One `special.predictor` per pre-year makes it match on the same 19
+outcome lags as the from-scratch fit.
+
+```{r synth-dataprep-show, eval=FALSE}
+ids <- cp |> distinct(State) |> arrange(State) |> mutate(id = row_number())
+d   <- cp |> left_join(ids, by = "State") |> as.data.frame()  # NOT a tibble
+
+dp <- dataprep(
+  foo = d, dependent = "PacksPerCapita", unit.variable = "id",
+  time.variable = "Year", unit.names.variable = "State",
+  special.predictors = lapply(1970:1988, \(y) list("PacksPerCapita", y, "mean")),
+  treatment.identifier = ids$id[ids$State == "California"],
+  controls.identifier  = setdiff(ids$id, ids$id[ids$State == "California"]),
+  time.predictors.prior = 1970:1988, time.optimize.ssr = 1970:1988,
+  time.plot = 1970:2000)
+invisible(capture.output(so <- synth(dp, verbose = FALSE)))   # optimizer is chatty
+```
+
+`synth()` prints its Nelder-Mead progress; wrap it in `capture.output` and read
+`so$solution.w` (donor weights) and `so$solution.v` (predictor importances).
+]
+
+<a href="#synth-pkg-main" class="nav-btn-br">← back</a>
+
+---
+
+name: placebo-dgp
+
+# Backup: The Placebo-in-Space Loop
+
+.small[
+```{r placebo-dgp-show, eval=FALSE}
+placebo_ratio <- function(nm) {
+  yy <- Ymat[, nm]
+  DD <- Ymat[, setdiff(colnames(Ymat), nm), drop = FALSE]
+  w  <- sc_weights(yy, DD, pre_idx)
+  g  <- yy - as.numeric(DD %*% w)
+  pre_r  <- sqrt(mean(g[pre_idx]^2))     # compute scalars FIRST
+  post_r <- sqrt(mean(g[post_idx]^2))
+  tibble(state = nm, pre_rmspe = pre_r,
+         post_rmspe = post_r, ratio = post_r / pre_r)
+}
+placebos <- map_dfr(colnames(Ymat), placebo_ratio)
+ca_ratio <- placebos$ratio[placebos$state == "California"]
+p_value  <- sum(placebos$ratio >= ca_ratio) / nrow(placebos)
+```
+
+**A trap worth flagging.** Do *not* write
+`tibble(pre = ..., post = sqrt(mean(g[-pre]^2)))`. Inside `tibble()` the new
+`pre` column masks the index vector, so `g[-pre]` silently indexes by the scalar
+pre-RMSPE and returns the wrong window. Compute the RMSPEs into named scalars
+first, then assemble the tibble. Each `solve.QP` is milliseconds, so 39 placebos
+run instantly.
+]
+
+<a href="#placebo-space-main" class="nav-btn-br">← back</a>
+
+---
+
+name: conformal-detail
+
+# Backup: Conformal SC, a Little Deeper
+
+.small[
+Fit SC on the full pre-period, giving a residual $\hat u_t$ at every period $t$.
+
+$$\hat u_t = Y_{1t} - \textstyle\sum_j \hat w_j Y_{jt}$$
+
+Under the sharp null $H_0: \tau_t = \tau_t^0$ for a hypothesized path, the
+adjusted residuals $\hat u_t - \tau_t^0 \mathbb{1}(t > T_0)$ should be
+exchangeable across time.
+
+**The test.** Compute a test statistic (e.g. a block sum of squared post-period
+adjusted residuals), then recompute it under all (or many) permutations of the
+time index. The conformal p-value is the fraction of permutations with a
+statistic at least as large. Invert over $\tau^0$ to get a confidence set for the
+whole effect path or for the average effect.
+
+**Assumptions and payoff.** Exchangeability is weaker than a parametric error
+model and does not require many control units, so conformal SC is the inference
+tool when the donor pool is too small for a credible placebo-in-space
+distribution. The cost: exchangeability can fail under strong serial correlation,
+which block permutation partly addresses. Package: `scinference`
+(Chernozhukov, Wuthrich and Zhu 2021).
+]
+
+<a href="#conformal-main" class="nav-btn-br">← back</a>
+
+---
+
+name: ascm-detail
+
+# Backup: The Augmented SC Estimator
+
+.small[
+Write the SC counterfactual as $\sum_j \hat w_j^{\text{scm}} Y_{jT}$ and its
+residual predictor imbalance as $\delta = X_1 - X_0 \hat W^{\text{scm}}$. ASCM adds
+an outcome-model term:
+
+$$\hat Y_{1T}(0) = \sum_j \hat w_j^{\text{scm}} Y_{jT} + \delta'\hat\eta,
+\qquad
+\hat\eta = \arg\min_{\eta}\; \sum_{j} \big(Y_{jT} - X_j'\eta\big)^2 + \zeta\|\eta\|^2$$
+
+a ridge regression of donor post-outcomes on donor pre-predictors. Equivalently,
+ASCM implies augmented weights
+
+$$\hat w_j^{\text{aug}} = \hat w_j^{\text{scm}} + \big(\text{ridge correction}\big)_j,$$
+
+which need **not** lie on the simplex: negative weights are allowed, and that is
+exactly what lets the estimator reach a treated unit outside the donor hull.
+
+- $\delta = 0$ (perfect pre-fit) $\Rightarrow$ correction vanishes, ASCM $=$ SC.
+- Ridge penalty $\zeta \to \infty$ $\Rightarrow$ correction shrinks to zero,
+  back to SC. $\zeta \to 0$ $\Rightarrow$ maximal extrapolation.
+
+`augsynth(..., progfunc = "Ridge", scm = TRUE)` fits it. On the ride-share panel
+it cut plain SC's bias from `r sprintf("%+.2f", att_sc_rp - truth)` to
+`r sprintf("%+.2f", att_ascm - truth)`.
+]
+
+<a href="#ascm-main" class="nav-btn-br">← back</a>
+
+---
+
+name: gsynth-detail
+
+# Backup: gsynth Estimation and Inference
+
+.small[
+The interactive-fixed-effects model
+
+$$Y_{it} = x_{it}'\beta + \lambda_i' f_t + \alpha_i + \xi_t + \varepsilon_{it}$$
+
+is fit by Xu's (2017) EM-style algorithm:
+
+1. **Controls only.** Iterate between (a) OLS of the FE-demeaned outcome on
+   $x_{it}$ for $\beta$, and (b) a principal-components step on the residual matrix
+   for $F$ and control loadings $\Lambda$ (Bai 2009). Converges to the IFE
+   estimates using no treated-unit post data.
+2. **Treated loadings.** Regress each treated unit's *pre-treatment* residual
+   $Y_{it} - x_{it}'\hat\beta$ on $\hat F$ over $t \le T_0$ to get $\hat\lambda_i$.
+3. **Impute and average.** Set
+   $\hat Y_{it}(0) = x_{it}'\hat\beta + \hat\lambda_i'\hat f_t$ and take the ATT as
+   the mean of $Y_{it} - \hat Y_{it}(0)$ over treated post cells.
+
+**Factor count.** Chosen by cross-validation: hold out pre-period observations,
+fit for each candidate $r$, pick the $r$ minimizing held-out MSPE. On the
+ride-share panel CV selected $r = `r gs$r.cv`$, the true value.
+
+**Inference.** Parametric bootstrap resamples the estimated errors (block for
+serial correlation), refits, and takes quantiles. Key setup:
+`gsynth(y ~ D, index = c("city","month"), force = "two-way", CV = TRUE,
+r = c(0, 4), se = TRUE, nboots = 200, inference = "parametric")`.
+]
+
+<a href="#gsynth-main" class="nav-btn-br">← back</a>
+
+---
+
+name: rideshare-dgp
+
+# Backup: The Factor-Panel DGP
+
+.small[
+```{r rideshare-dgp-show, eval=FALSE}
+make_rideshare <- function(seed = 6, n_donor = 20, n_t = 48, t_treat = 36,
+                           effect = 1.5, noise = 0.35, treat_shift = 1.2) {
+  set.seed(seed); n_units <- n_donor + 1; r <- 2
+  F_t <- cbind(cumsum(rnorm(n_t, 0, 0.3)) + sin((1:n_t) / 6),  # latent factor 1
+               cumsum(rnorm(n_t, 0, 0.2)))                     # latent factor 2
+  L <- matrix(rnorm(n_units * r, 0, 1), n_units, r)            # city loadings
+  L[1, ] <- L[1, ] + treat_shift            # treated city near the hull edge
+  mu_i <- rnorm(n_units, 8, 1); gamma_t <- 0.02 * (1:n_t)
+  units <- tibble(city = 1:n_units, treated_unit = c(TRUE, rep(FALSE, n_donor)))
+  expand_grid(city = 1:n_units, month = 1:n_t) |> left_join(units, by = "city") |>
+    mutate(post = month >= t_treat, D = as.integer(treated_unit & post),
+           y0 = mu_i[city] + gamma_t[month] + rowSums(L[city, ] * F_t[month, ]) +
+                rnorm(n(), 0, noise),
+           y  = y0 + effect * D)
+}
+```
+
+The `treat_shift` pushes the treated city's loadings toward the boundary of the
+donor-loading cloud, so plain SC (convex weights) cannot reproduce it and
+over-shoots, while gsynth (which estimates the loadings) recovers the truth. Two
+factors, $r = 2$, plus a common trend is a genuinely low-rank panel, exactly the
+structure gsynth is built for.
+]
+
+<a href="#rideshare-main" class="nav-btn-br">← back</a>
