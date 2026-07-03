@@ -199,7 +199,7 @@ dm_overall <- weighted.mean(dm$didm, dm$n_sw)
 <tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
 <tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
 <tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
-<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+<tr><td>8</td><td><a href="../module-08/slides.html">Matrix Completion and the Modern Panel Toolbox</a></td><td>done</td></tr>
 </table>
 
 ---

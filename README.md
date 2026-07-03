@@ -7,8 +7,8 @@ forests for heterogeneous treatment effects.
 
 ## Status
 
-**Modules 1-7 built** (concepts + slides + exercises, rendered decks
-committed). Module 8 (matrix completion) upcoming.
+**Modules 1-8 built** (concepts + slides + exercises, rendered decks
+committed). Course complete.
 
 ## Why this exists
 
@@ -34,14 +34,17 @@ See [learning-plan.md](learning-plan.md) for the full breakdown.
 | 5 | [Synthetic DiD and the Bridge from SC to DiD](module-05/concepts.md) | done |
 | 6 | [Causal Forest: Honest Splitting and Asymptotics](module-06/concepts.md) | done |
 | 7 | [Policy Learning: From τ̂(x) to Deployment Rules](module-07/concepts.md) | done |
-| 8 | Matrix Completion and the Modern Panel Toolbox | upcoming |
+| 8 | [Matrix Completion and the Modern Panel Toolbox](module-08/concepts.md) | done |
 
 ## Domain
 
 Following the convention of the sibling course collection, applications use
 ride-sharing (Uber / Lyft style) data. Where formal methods need a specific
 empirical setting (e.g., the original Card-Krueger DiD or the Abadie-Diamond
-California Prop 99 SC), the canonical paper's data is used.
+California Prop 99 SC), the canonical paper's data is used. The methods
+transfer directly to the standard platform settings: staggered feature
+rollouts, geo-level policy changes, fee or pricing changes in a single
+market, and targeted incentives.
 
 ## Structure
 

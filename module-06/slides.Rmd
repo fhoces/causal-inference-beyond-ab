@@ -149,7 +149,7 @@ ablation <- bind_rows(grid_stats(TRUE), grid_stats(FALSE))
 <tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
 <tr><td><b>6</b></td><td><b>Causal Forest: Honest Splitting and Asymptotics</b> <i>(you are here)</i></td><td>current</td></tr>
 <tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
-<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+<tr><td>8</td><td><a href="../module-08/slides.html">Matrix Completion and the Modern Panel Toolbox</a></td><td>done</td></tr>
 </table>
 
 ---
