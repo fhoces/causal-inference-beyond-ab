@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="" xml:lang="">
+  <head>
+    <title>Module 3: Honest DiD</title>
+    <meta charset="utf-8" />
+    <script src="slides_files/header-attrs-2.29/header-attrs.js"></script>
+    <link href="slides_files/remark-css-0.0.1/default.css" rel="stylesheet" />
+    <link href="slides_files/remark-css-0.0.1/default-fonts.css" rel="stylesheet" />
+  </head>
+  <body>
+    <textarea id="source">
+class: center, middle, inverse, title-slide
+
+.title[
+# Module 3: Honest DiD
+]
+.subtitle[
+## Sensitivity Bounds for Parallel Trends: Rambachan-Roth
+]
+
+---
+
+
+&lt;style type="text/css"&gt;
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+&lt;/style&gt;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Course Map
+
+&lt;table&gt;
+&lt;tr&gt;&lt;th&gt;#&lt;/th&gt;&lt;th&gt;Module&lt;/th&gt;&lt;th&gt;Status&lt;/th&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;1&lt;/td&gt;&lt;td&gt;&lt;a href="../module-01/slides.html"&gt;TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;2&lt;/td&gt;&lt;td&gt;&lt;a href="../module-02/slides.html"&gt;Heterogeneity-Robust DiD: CS, SA, BJS, dCDH&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;b&gt;3&lt;/b&gt;&lt;/td&gt;&lt;td&gt;&lt;b&gt;Honest DiD: Sensitivity Bounds for Parallel Trends&lt;/b&gt; &lt;i&gt;(you are here)&lt;/i&gt;&lt;/td&gt;&lt;td&gt;current&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;4&lt;/td&gt;&lt;td&gt;&lt;a href="../module-04/slides.html"&gt;Synthetic Control: Estimator, Inference, Variants&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;5&lt;/td&gt;&lt;td&gt;&lt;a href="../module-05/slides.html"&gt;Synthetic DiD and the Bridge from SC to DiD&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;6&lt;/td&gt;&lt;td&gt;&lt;a href="../module-06/slides.html"&gt;Causal Forest: Honest Splitting and Asymptotics&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;7&lt;/td&gt;&lt;td&gt;&lt;a href="../module-07/slides.html"&gt;Policy Learning: From HTE to Deployment Rules&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;Matrix Completion and the Modern Panel Toolbox&lt;/td&gt;&lt;td&gt;upcoming&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+
+---
+
+# This Module
+
+Modules 1 and 2 assumed parallel trends and fixed the *staggered-timing* bias.
+This module stress-tests parallel trends itself. The tour said pre-trend tests
+are weak and Rambachan-Roth bound the damage. Here is the machinery.
+
+--
+
+**You will be able to:**
+
+1. Say precisely why a passing pre-trend test is weak evidence: low power and
+   pre-test bias, both from Roth (2022).
+2. Write the Rambachan-Roth (2023) restriction sets `\(\Delta^{SD}(M)\)` and
+   `\(\Delta^{RM}(\bar M)\)` and say what economic story each encodes.
+3. Report a **breakdown value**: how large a violation it takes to overturn a
+   result.
+4. Run the `HonestDiD` workflow end to end and read the sensitivity plot.
+
+--
+
+**Running application:** the single-cohort event study carved out of the
+Module 1-2 rollout: cohort `\(g = 25\)` versus six never-treated cities.
+
+---
+
+name: pretest-critique-main
+
+# A Passing Pre-Trend Test Is Weak Evidence
+
+.pull-left[
+The event-study "pre-trend test" is a joint Wald test that the lead
+coefficients are zero. Two failures, both Roth (2022):
+
+- **Low power.** A near-linear violation is the exact shape the test cannot
+  see. Below, a slope that biases the estimate is caught well under 80% of
+  the time.
+- **Pre-test bias.** Dropping analyses that fail the test does not clean up
+  the survivors. It makes the bias **worse** (next).
+]
+
+.pull-right[
+&lt;img src="slides_files/figure-html/power-fig-1.png" style="display: block; margin: auto;" /&gt;
+]
+
+.highlight-box[
+Same design as our application. A slope `\(\delta = 0.10\)` biases the naive
+first-post estimate by that much yet trips the test only about
+55%
+of the time.
+]
+
+&lt;a href="#pretrend-power-detail" class="nav-btn"&gt;power derivation&lt;/a&gt;
+&lt;a href="#selective-inference-detail" class="nav-btn-br"&gt;pre-test bias&lt;/a&gt;
+
+---
+
+name: rr-framework-main
+
+# The Rambachan-Roth Reframe
+
+Stack the event-study coefficients, `\(\hat\beta \sim \mathcal{N}(\beta, \Sigma)\)`,
+and split each into effect and violation:
+
+`$$\beta_{post} = \underbrace{\tau_{post}}_{\text{causal effect}} + \underbrace{\delta_{post}}_{\text{PT violation}}, \qquad \beta_{pre} = \delta_{pre}.$$`
+
+Exact PT is `\(\delta = 0\)`. **Drop it.** Assume only `\(\delta \in \Delta\)` for a
+set `\(\Delta\)` you choose.
+
+--
+
+The pre-periods estimate `\(\delta_{pre}\)` directly, so `\(\Delta\)` links the
+*observed* pre-violation to the *unobserved* post-violation. The target
+`\(\theta = \ell' \tau_{post}\)` is then **partially identified**:
+
+`$$\mathcal{S}(\beta, \Delta) = \left\{ \ell'(\beta_{post} - \delta_{post}) : \delta \in \Delta,\ \delta_{pre} = \beta_{pre} \right\}.$$`
+
+--
+
+.blue-box[
+Honesty is paid in **width**. As `\(\Delta\)` grows the identified set widens and
+the robust CI grows with it. The point estimate does not silently move; the
+uncertainty does.
+]
+
+&lt;a href="#partial-id-detail" class="nav-btn"&gt;partial identification&lt;/a&gt;
+
+---
+
+name: restriction-menu-main
+
+# The Restriction Menu
+
+Choosing `\(\Delta\)` *is* the method. Each choice is an economic claim about the
+confounder you fear.
+
+.small[
+| `\(\Delta\)` | Restriction | Story |
+|---|---|---|
+| `\(\Delta^{SD}(M)\)` | second differences of `\(\delta\)` bounded by `\(M\)` | trend does not *accelerate* by more than `\(M\)`/period |
+| `\(\Delta^{RM}(\bar M)\)` | post jump `\(\leq \bar M \times\)` worst pre jump | post violation no worse than pre, scaled |
+| `\(\Delta^{SDPB}, \Delta^{RMB}\)` | `\(+\)` sign of `\(\delta_{post}\)` | you know the direction of the bias |
+| `\(\Delta^{SDM}, \Delta^{SDI}\)` | `\(+\)` monotone `\(\delta\)` | the trend does not reverse |
+]
+
+--
+
+.highlight-box[
+Impose only what institutional knowledge defends. A sign restriction you
+cannot justify buys a narrower interval you should not trust. Sign and
+monotonicity *combine* with `\(\Delta^{SD}\)` or `\(\Delta^{RM}\)`; each added
+restriction shrinks the identified set.
+]
+
+---
+
+name: delta-sd-main
+
+# Smoothness: `\(\Delta^{SD}(M)\)`
+
+Bound the discrete second difference of the violation:
+
+`$$\Delta^{SD}(M) = \Big\{ \delta : \big| (\delta_{s+1} - \delta_s) - (\delta_s - \delta_{s-1}) \big| \leq M \ \ \forall s \Big\}.$$`
+
+- `\(M = 0\)`: violation is exactly **linear**, extrapolated from the pre-period
+  slope.
+- `\(M &gt; 0\)`: allow curvature up to `\(M\)` per period.
+
+--
+
+.blue-box[
+Every **linear** trend has zero second difference, so it sits in
+`\(\Delta^{SD}(M)\)` for *all* `\(M \geq 0\)`. Under `\(\Delta^{SD}\)` the estimator
+extrapolates the pre-period line into the post-period and nets it out. A purely
+linear confound is something `\(\Delta^{SD}\)` **corrects for**, not something it
+flags.
+]
+
+Right when your worry is a smooth secular trend (adoption momentum, a slow
+demand shift) contaminating the comparison.
+
+&lt;a href="#delta-sd-derivation" class="nav-btn"&gt;geometry + why linear is free&lt;/a&gt;
+
+---
+
+name: delta-rm-main
+
+# Relative Magnitudes: `\(\Delta^{RM}(\bar M)\)`
+
+Bound the largest post jump by `\(\bar M\)` times the largest pre jump:
+
+`$$\Delta^{RM}(\bar M) = \Big\{ \delta : |\delta_{s+1} - \delta_s| \leq \bar M \cdot \max_{s' &lt; 0} |\delta_{s'+1} - \delta_{s'}| \ \ \forall s \geq 0 \Big\}.$$`
+
+The story: whatever moved the groups apart before treatment cannot suddenly
+move them much faster after. `\(\bar M = 1\)` means the post violation is no bigger,
+period for period, than the worst wiggle already visible pre-treatment.
+
+--
+
+.highlight-box[
+Unlike `\(\Delta^{SD}\)`, this keys on the **magnitude** of the estimated
+pre-violation, so it *does* react to a linear confound: a steeper pre-trend
+raises the benchmark and widens the bounds. The default when you will not assume
+the trend is smooth, only that it does not change character at the treatment
+date.
+]
+
+&lt;a href="#delta-rm-derivation" class="nav-btn"&gt;the RM set, formally&lt;/a&gt;
+
+---
+
+name: breakdown-main
+
+# The Breakdown Value
+
+Do not pick one `\(M\)`. Trace the robust CI as `\(M\)` grows and report where the
+conclusion flips:
+
+`$$M^{\ast} = \sup \Big\{ M : 0 \notin \mathcal{C}_{1-\alpha}\big(\Delta^{SD}(M)\big) \Big\},$$`
+
+the largest smoothness allowance under which the robust CI still excludes zero
+(and `\(\bar M^{\ast}\)` for `\(\Delta^{RM}\)`).
+
+--
+
+.blue-box[
+It converts "is the effect significant?" into "**how large a PT violation would
+it take to make it insignificant?**" You then judge whether a violation that
+large is plausible, using the observed pre-period wiggle as the yardstick.
+`\(\bar M^{\ast} = 1.5\)` reads directly: the post violation would have to be 1.5x
+the worst pre one.
+]
+
+&lt;a href="#breakdown-derivation" class="nav-btn"&gt;reading it off the CI path&lt;/a&gt;
+
+---
+
+name: robust-ci-main
+
+# How the Robust CI Is Built
+
+.small[
+| Method | Idea | Use for |
+|---|---|---|
+| **FLCI** | shortest fixed-length interval, min-max over `\(\Delta\)` | convex, centrosymmetric `\(\Delta\)` (e.g. `\(\Delta^{SD}\)`) |
+| **Conditional / C-LF** | invert an ARP moment-inequality test over `\(\mathcal{S}\)` | non-centrosymmetric `\(\Delta\)` (e.g. `\(\Delta^{RM}\)`) |
+]
+
+The conditional least-favorable hybrid (**C-LF**) of Andrews-Roth-Pakes is the
+recommended default for `\(\Delta^{RM}\)`, where FLCI does not apply.
+
+--
+
+.highlight-box[
+On this machine the FLCI solver is unavailable, so every run here uses
+**C-LF**, which is valid for both sets. For `\(\Delta^{SD}\)` the FLCI is usually a
+touch shorter; the breakdown-value logic is identical.
+]
+
+&lt;a href="#robust-ci-detail" class="nav-btn"&gt;FLCI vs ARP&lt;/a&gt;
+
+---
+
+name: application-main
+
+# Application: One Clean Cohort
+
+From the Module 1-2 rollout, carve out cohort `\(g = 25\)` (8 cities) versus the 6
+never-treated cities, window `\(-5\)` to `\(+5\)`, clustered by city.
+
+
+```r
+d &lt;- make_panel("constant") |&gt;
+  filter(g == 25 | !is.finite(g)) |&gt;                  # one cohort + controls
+  mutate(rel_time = if_else(is.finite(g), t - 25L, -1L)) |&gt; # never-tr -&gt; base
+  filter(t &gt;= 20, t &lt;= 30)                            # rel_time in [-5, 5]
+feols(y ~ i(rel_time, ref = -1) | city + t, data = d, cluster = ~city)
+```
+
+--
+
+.highlight-box[
+A clustered `\(\Sigma\)` has rank at most (clusters `\(- 1\)`). With 14 clusters, a
+`\(-10..+10\)` window (20 coefficients) gives a rank-deficient `\(\Sigma\)` and the
+bounds explode. The `\(-5..+5\)` window (10 coefficients) stays under the ceiling.
+Always check the coefficient count against the cluster count.
+]
+
+&lt;a href="#application-dgp" class="nav-btn"&gt;event-study construction&lt;/a&gt;
+
+---
+
+name: event-study-main
+
+# The Event Study
+
+&lt;img src="slides_files/figure-html/es-plot-1.png" style="display: block; margin: auto;" /&gt;
+
+Parallel trends holds by construction; the pre-test passes, with
+`\(p = 0.16\)`. But "passes" is exactly what Roth warns us to distrust.
+
+---
+
+name: validate-main
+
+# First, Validate the Handoff
+
+`HonestDiD` wants `betahat` in order (earliest pre `\(\dots -2\)`, then `\(0 \dots K\)`)
+and its `sigma`. `fixest`'s `i()` already returns that order. **Confirm
+`constructOriginalCS` reproduces the `feols` CI before trusting anything.**
+
+
+```r
+ocs1 &lt;- constructOriginalCS(es$beta, es$sigma,        # numPre = 4, numPost = 6
+                            es$numPre, es$numPost, l_vec = basisVector(1, es$numPost))
+c(honestdid_lb = ocs1$lb, honestdid_ub = ocs1$ub,
+  feols_beta   = es$beta[which(es$evt == 0)])
+```
+
+```
+## honestdid_lb honestdid_ub   feols_beta 
+##    0.4571607    1.3187324    0.8879465
+```
+
+--
+
+The `HonestDiD` "original" CI is [0.457, 1.319],
+matching `\(\hat\beta_0 \pm 1.96\,\mathrm{SE}\)` for the first post-period exactly.
+Ordering is right; now the sensitivity results mean something.
+
+---
+
+name: workflow-main
+
+# The Workflow: Event Study In, Sensitivity Out
+
+
+```r
+# smoothness: second differences bounded by each M
+sd &lt;- createSensitivityResults(
+  betahat = es$beta, sigma = es$sigma,
+  numPrePeriods = 4, numPostPeriods = 6,
+  Mvec = seq(0.05, 0.6, 0.05),
+  l_vec = basisVector(1, 6),          # target the FIRST post-period
+  method = "C-LF")                    # FLCI solver unavailable here
+
+# relative magnitudes: post jump &lt;= Mbar * worst pre jump
+rm &lt;- createSensitivityResults_relativeMagnitudes(
+  betahat = es$beta, sigma = es$sigma,
+  numPrePeriods = 4, numPostPeriods = 6,
+  Mbarvec = seq(0.25, 2, 0.25), l_vec = basisVector(1, 6))
+```
+
+Two calls, one per restriction. Each returns the robust CI at every `\(M\)` (or
+`\(\bar M\)`) in the grid. Keep the RM grid short: it is the slower of the two.
+
+---
+
+name: sd-result-main
+
+# Smoothness Sensitivity, Clean Case
+
+&lt;img src="slides_files/figure-html/sd-plot-1.png" style="display: block; margin: auto;" /&gt;
+
+The robust CI first touches zero near `\(M = 0.45\)`:
+that is the smoothness breakdown value `\(M^{\ast}\)`.
+
+---
+
+name: rm-result-main
+
+# Relative-Magnitudes Sensitivity, Clean Case
+
+.pull-left[
+&lt;img src="slides_files/figure-html/rm-plot-1.png" style="display: block; margin: auto;" /&gt;
+]
+
+.pull-right[
+Breakdown values, first post-period target:
+
+.small[
+| Restriction | Breakdown |
+|---|---|
+| `\(\Delta^{SD}\)` | `\(M^{\ast} = 0.45\)` |
+| `\(\Delta^{RM}\)` | `\(\bar M^{\ast} = 1.50\)` |
+]
+
+Here the relative-magnitudes breakdown is 1.5, so
+the post violation would have to be 1.5x the worst
+pre-period wiggle to kill significance. Both are large relative to anything the
+pre-period shows.
+]
+
+.blue-box[
+**Report a number, not a verdict.** "Significant, and it survives a
+parallel-trends violation 1.5x the pre-period one"
+beats "the pre-trends looked flat."
+]
+
+---
+
+name: target-choice-main
+
+# The Target `\(\ell\)` Matters
+
+Switch `\(\ell\)` from the first post-period to the **average** of all six. The same
+data, a different estimand:
+
+.small[
+| Target `\(\ell\)` | Original CI | `\(M^{\ast}\)` | `\(\bar M^{\ast}\)` |
+|---|---|---|---|
+| first post-period | [0.46, 1.32] | 0.45 | 1.50 |
+| average of post | [0.83, 1.49] | 0.05 | 0.50 |
+]
+
+--
+
+.highlight-box[
+The average is far more fragile. Under `\(\Delta^{SD}\)` the worst-case bias at
+post-period `\(s\)` grows like `\(M \cdot s^2\)`, so an average loading on late horizons
+is exposed to compounding extrapolation. The first post-period is the most
+robust target; long-run averages the least. Pick `\(\ell\)` to match the estimand
+you report, and expect later horizons to be more fragile.
+]
+
+&lt;a href="#l-vec-detail" class="nav-btn"&gt;the compounding math&lt;/a&gt;
+
+---
+
+name: confounded-main
+
+# Confounded Case: the Restriction Must Match the Threat
+
+Inject a differential linear trend of slope `\(0.10\)` into the treated cohort. The
+pre-test now rejects sharply, with `\(p = 0.0001\)`. The breakdown
+values split:
+
+.small[
+| Restriction | Clean | Confounded |
+|---|---|---|
+| `\(\Delta^{SD}\)` | `\(M^{\ast} = 0.45\)` | `\(M^{\ast} = 0.45\)` |
+| `\(\Delta^{RM}\)` | `\(\bar M^{\ast} = 1.50\)` | `\(\bar M^{\ast} = 1.00\)` |
+]
+
+--
+
+.highlight-box[
+`\(\Delta^{RM}\)` drops: the steeper pre-violation inflates the benchmark. `\(\Delta^{SD}\)`
+**does not move**: a linear trend has zero second difference, so smoothness
+extrapolates and nets it out. If you fear a smooth confound, `\(\Delta^{SD}\)`
+*assumes it continues and corrects it* (strong). If you will not assume that,
+`\(\Delta^{RM}\)` is the honest choice.
+]
+
+&lt;a href="#sd-vs-rm-detail" class="nav-btn"&gt;why SD is blind to a line&lt;/a&gt;
+
+---
+
+name: power-bridge-main
+
+# One Rejection Is Not a Reliable Test
+
+In that confounded sample the pre-test rejected. So it "worked." But that is
+**one draw**.
+
+--
+
+- Whether the test *reliably* catches a trend of slope `\(0.10\)` is a
+  repeated-sampling property.
+- The power curve on slide 3 says it is caught only about
+  55%
+  of the time.
+- And conditioning on the ~45%
+  that pass makes the surviving bias **worse**, because leads and lags are
+  positively correlated, about `\(+0.49\)` here.
+
+--
+
+.blue-box[
+The gap between "this sample rejected" and "the test reliably rejects" is the
+entire Roth (2022) argument, and the reason the deliverable is a breakdown value,
+not a pre-test `\(p\)`. `exercise.R` reproduces both facts analytically.
+]
+
+&lt;a href="#selective-inference-detail" class="nav-btn"&gt;conditioning is worse&lt;/a&gt;
+
+---
+
+name: workflow-checklist-main
+
+# Practitioner Checklist
+
+.small[
+| Step | What you do | Why |
+|---|---|---|
+| 1. Dimension | coefficient count `\(&lt;\)` cluster count | else `\(\Sigma\)` is rank-deficient, bounds explode |
+| 2. Validate | `constructOriginalCS` `\(=\)` `feols` CI | catches a mis-ordered `betahat` |
+| 3. Choose `\(\Delta\)` | `\(\Delta^{SD}\)` for smooth, `\(\Delta^{RM}\)` for "no worse than pre" | the restriction is an economic claim |
+| 4. Breakdown | report `\(M^{\ast}\)` / `\(\bar M^{\ast}\)`, calibrate vs pre-period | one honest number |
+| 5. Plot | show the sensitivity path, not a pass/fail | conveys the whole robustness curve |
+]
+
+--
+
+At Amazon scale (staggered launches across marketplaces, fulfillment centers,
+categories), a clean never-treated control and long pre-periods are rare, so
+"how robust is this to the parallel-trends assumption?" is asked of every
+DiD readout. This is the answer.
+
+---
+
+name: m3-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "The pre-trends look flat. Are we safe?" | Flat pre-trends are weak evidence: the test has low power against near-linear violations and pre-testing biases the survivors. Report a breakdown value, not a pass/fail. |
+| "What is a breakdown value and how do I read it?" | The largest PT violation (in `\(M\)` or `\(\bar M\)`) under which the robust CI still excludes zero. `\(\bar M^{\ast} = 1.5\)`: the post violation would need to be 1.5x the worst pre one. |
+| "Smoothness or relative magnitudes?" | `\(\Delta^{SD}\)` if you fear a smooth trend (it extrapolates and corrects a linear one); `\(\Delta^{RM}\)` if you only assume the post violation is no worse than the pre. Match the restriction to the confounder. |
+| "A linear confound with a clean breakdown value under `\(\Delta^{SD}\)`: trust it?" | Only if a *linear* trend is truly your worry: `\(\Delta^{SD}\)` nets linear trends out, so its `\(M^{\ast}\)` is blind to them. Check `\(\Delta^{RM}\)`, which reacts. |
+| "How does this scale to our launches?" | Few clusters cap the event-study width (rank of `\(\Sigma\)`); validate the original CI; report breakdown values per horizon since later horizons are more fragile. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Rambachan and Roth (2023), *ReStud* | The framework on these slides: the sets `\(\Delta\)`, partial identification, robust CIs, breakdown values. |
+| Roth (2022), *AER: Insights* | Pre-trend tests have low power; conditioning on passing distorts inference. The exercise reproduces both. |
+| Andrews, Roth and Pakes (2023), *ReStud* | The conditional moment-inequality inference (ARP / C-LF) behind the robust CIs. |
+| Roth, Sant'Anna, Bilinski and Poe (2023), *J. Econometrics* | Where honest DiD sits in the modern DiD toolbox. |
+| Manski (2003) | The partial-identification tradition the whole approach descends from. |
+]
+
+**Next module:** synthetic control, a different answer to "what is the
+counterfactual trend?" that reweights donors instead of assuming parallelism.
+
+**Drill:** `exercise.R` reproduces the Roth power simulation analytically and
+computes breakdown values, clean vs confounded.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: pretrend-power-detail
+
+# Backup: Roth's Power Calculation, Analytically
+
+.small[
+No panel re-simulation needed. Fit the event study **once** to get `\(\Sigma\)`, then
+draw `\(\hat\beta \sim \mathcal{N}(\beta_{true}, \Sigma)\)`. Impose a linear
+violation of slope `\(\delta\)` and no true effect:
+
+`$$\beta_{true, s} = \delta \cdot (s + 1) \quad (\text{relative to base period } -1).$$`
+
+For each draw, the pre-trend Wald statistic is
+`\(\hat\beta_{pre}' \Sigma_{pre}^{-1} \hat\beta_{pre}\)`; power is the share exceeding
+`\(\chi^2_{0.95, k_{pre}}\)`.
+
+
+```r
+roth_sim &lt;- function(delta, R = 3000) {
+  bt &lt;- delta * (evt + 1)                         # linear trend, tau = 0
+  dr &lt;- MASS::mvrnorm(R, mu = bt, Sigma = Sigma)
+  wald &lt;- apply(dr[, pre_idx], 1, function(b) t(b) %*% solve(Sigma_pre) %*% b)
+  mean(wald &gt; qchisq(0.95, df = numPre))          # power
+}
+```
+
+Because `\(\hat\beta_{pre}\)` is Gaussian, this is exact, not Monte Carlo error on a
+DGP. The worst-case linear slope is the one the test is *least* able to see, and
+that is precisely the slope that biases the post estimate most. Low power is
+structural, not a small-sample accident.
+]
+
+&lt;a href="#pretest-critique-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: selective-inference-detail
+
+# Backup: Why Conditioning Makes Bias Worse
+
+.small[
+The naive first-post estimate is unbiased *for the biased estimand*
+`\(\tau + \delta\)`: unconditionally `\(\mathbb{E}[\hat\beta_0] = \delta\)` (here
+`\(\tau = 0\)`). A "pre-test estimator" keeps only draws that pass, i.e. draws whose
+`\(\hat\beta_{pre}\)` landed near zero.
+
+The violation pushes `\(\beta_{pre}\)` *away* from zero, so a draw passes when noise
+pushes it *back*. Leads and lags share the base period `\(-1\)`, so
+`\(\mathrm{Cov}(\hat\beta_{pre}, \hat\beta_0) &gt; 0\)`, about
+`\(+0.49\)` here. The same noise that shrank the leads
+inflated the lag:
+
+`$$\big|\mathbb{E}[\hat\beta_0 \mid \text{pass}]\big| \; &gt; \; \big|\mathbb{E}[\hat\beta_0]\big|.$$`
+
+| `\(\delta\)` | naive bias | bias `\(\mid\)` passed |
+|---|---|---|
+| 0.06 | 0.052 | 0.096 |
+| 0.10 | 0.093 | 0.206 |
+
+At `\(\delta = 0.10\)` pre-testing roughly **doubles** the bias. Screening on
+pre-trends does not rescue you; it selects the samples where the trend hid.
+]
+
+&lt;a href="#pretest-critique-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: partial-id-detail
+
+# Backup: The Identified Set, Concretely
+
+.small[
+Only the sum `\(\tau_{post} + \delta_{post}\)` is observed. Fix the pre-period at its
+estimate, `\(\delta_{pre} = \beta_{pre}\)`, and sweep `\(\delta_{post}\)` over everything
+`\(\Delta\)` permits given that pre-period. The set of target values consistent with
+the data is
+
+`$$\mathcal{S}(\beta, \Delta) = \Big\{ \ell'\big(\beta_{post} - \delta_{post}\big) : (\beta_{pre}, \delta_{post}) \in \Delta \Big\}.$$`
+
+- If `\(\Delta = \{0\}\)` (exact PT), `\(\mathcal{S}\)` is the point `\(\ell'\beta_{post}\)`:
+  the usual event-study estimate.
+- If `\(\Delta = \mathbb{R}^{k}\)` (anything goes), `\(\mathcal{S} = \mathbb{R}\)`:
+  nothing is identified without a control-trend assumption.
+- The useful sets sit in between: big enough to be credible, small enough to say
+  something.
+
+Inference then covers the *set*, not a point. Two flavors: cover the whole
+identified set, or cover the true parameter (the ARP conditional approach, less
+conservative). `HonestDiD` does the latter.
+]
+
+&lt;a href="#rr-framework-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: delta-sd-derivation
+
+# Backup: `\(\Delta^{SD}\)` Geometry and the Free Linear Trend
+
+.small[
+Write the violation path `\(\delta_{-k}, \dots, \delta_{-1}=0, \delta_0, \dots\)`.
+The second difference `\(\Delta^2 \delta_s = \delta_{s+1} - 2\delta_s + \delta_{s-1}\)`
+is the discrete curvature. `\(\Delta^{SD}(M)\)` caps `\(|\Delta^2 \delta_s| \leq M\)`
+everywhere.
+
+Decompose any path into a **linear** part (fixed by the two base-adjacent
+points) plus curvature. `\(\Delta^2\)` annihilates the linear part, so:
+
+- The linear component is *unrestricted* by `\(\Delta^{SD}(M)\)` for any `\(M\)`. The
+  identified set is centered on the linear extrapolation of the pre-trend.
+- `\(M\)` controls only how far the post path may bow away from that line. The
+  worst-case deviation at post-period `\(s\)` grows like `\(M \cdot s^2\)` (curvature
+  integrated twice), which is why late horizons blow up first.
+
+Consequence: shifting the whole sample by a linear confound moves the estimate
+and the extrapolation **together**, leaving `\(M^{\ast}\)` unchanged (slide
+[confounded case](#confounded-main)). `\(\Delta^{SD}\)` answers "how much curvature
+can I tolerate?", never "is there a line?".
+]
+
+&lt;a href="#delta-sd-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: delta-rm-derivation
+
+# Backup: `\(\Delta^{RM}\)`, Formally
+
+.small[
+Let the first difference be `\(\Delta \delta_s = \delta_{s+1} - \delta_s\)` (the
+period-to-period change in the violation). Define the worst pre-period change
+
+`$$D_{pre} = \max_{s' &lt; 0} |\Delta \delta_{s'}|,$$`
+
+which the pre-period coefficients estimate. `\(\Delta^{RM}(\bar M)\)` requires every
+post-period change to obey
+
+`$$|\Delta \delta_s| \leq \bar M \cdot D_{pre}, \qquad s \geq 0.$$`
+
+- The set is a scaled cone anchored to the *observed* pre-period wiggle, not an
+  absolute magnitude, hence "relative."
+- It is **not centrosymmetric**, so FLCI does not apply and inference uses the
+  ARP conditional / C-LF construction.
+- A steeper pre-trend raises `\(D_{pre}\)`, enlarges the set, and lowers
+  `\(\bar M^{\ast}\)`: the restriction reacts to exactly the linear confound that
+  `\(\Delta^{SD}\)` ignores.
+
+Reach for `\(\Delta^{RM}\)` when you are unwilling to assume smoothness but will
+assume the post-period trend is no wilder than the pre-period one.
+]
+
+&lt;a href="#delta-rm-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: breakdown-derivation
+
+# Backup: Reading the Breakdown Value Off the CI Path
+
+.small[
+For each `\(M\)`, `HonestDiD` returns a robust CI `\([\text{lb}(M), \text{ub}(M)]\)`.
+Both endpoints move monotonically outward in `\(M\)` (a bigger `\(\Delta\)` can only
+enlarge the identified set). Define the breakdown value as the first `\(M\)` at
+which the CI covers zero:
+
+`$$M^{\ast} = \min\{ M : \text{lb}(M) \leq 0 \leq \text{ub}(M) \}.$$`
+
+Practically, run a grid and find where `\(\text{lb}(M)\)` crosses zero. In the clean
+case, `\(\text{lb}\)` falls from 0.29 at `\(M = 0.05\)` through
+zero near `\(M = 0.45\)`:
+
+
+```
+## # A tibble: 10 × 4
+##        M     lb    ub excludes_0
+##    &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt; &lt;lgl&gt;     
+##  1  0.05  0.289  1.96 TRUE      
+##  2  0.1   0.248  2.00 TRUE      
+##  3  0.15  0.214  2.03 TRUE      
+##  4  0.2   0.17   2.08 TRUE      
+##  5  0.25  0.135  2.12 TRUE      
+##  6  0.3   0.089  2.16 TRUE      
+##  7  0.35  0.052  2.2  TRUE      
+##  8  0.4   0.005  2.24 TRUE      
+##  9  0.45 -0.034  2.28 FALSE     
+## 10  0.5  -0.083  2.33 FALSE
+```
+
+Report `\(M^{\ast}\)` with its yardstick: "the effect survives curvature up to
+`\(M^{\ast}\)`, versus a pre-period second difference of at most (observed value)."
+A breakdown value without a scale to compare it to is not yet an argument.
+]
+
+&lt;a href="#breakdown-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: robust-ci-detail
+
+# Backup: FLCI vs the ARP Conditional Approach
+
+.small[
+**FLCI** (fixed-length CI). Restrict to affine estimators `\(a + v'\hat\beta\)` and
+choose `\(v\)` to minimize the CI length subject to worst-case coverage over
+`\(\delta \in \Delta\)`. This is a tractable convex program **only when `\(\Delta\)` is
+convex and centrosymmetric**, i.e. `\(\delta \in \Delta \Rightarrow -\delta \in \Delta\)`,
+which `\(\Delta^{SD}(M)\)` satisfies but `\(\Delta^{RM}(\bar M)\)` does not. FLCI gives the
+shortest honest interval when it applies.
+
+**ARP conditional (Andrews-Roth-Pakes).** Cast `\(\delta \in \Delta\)` as linear
+moment inequalities and invert a test of `\(H_0: \theta = \theta_0\)` over a grid of
+`\(\theta_0\)`. The conditional test corrects for the fact that which inequalities
+bind is data-dependent. The **least-favorable hybrid (C-LF)** blends a
+least-favorable first stage with the conditional test for power. It is valid for
+*any* polyhedral `\(\Delta\)`, so it covers `\(\Delta^{RM}\)` and the combined sets.
+
+Rule of thumb: `\(\Delta^{SD}\)` alone -&gt; FLCI (shortest); anything with relative
+magnitudes, signs, or monotonicity -&gt; C-LF. Here FLCI is unavailable, so C-LF is
+used throughout, at a small length cost for `\(\Delta^{SD}\)`.
+]
+
+&lt;a href="#robust-ci-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: application-dgp
+
+# Backup: Building the Event Study
+
+.small[
+
+```r
+event_fit &lt;- function(scenario = "constant", confound = 0) {
+  d &lt;- make_panel(scenario) |&gt;
+    filter(g == 25 | !is.finite(g)) |&gt;                     # one cohort + never-tr
+    mutate(rel_time = if_else(is.finite(g), as.integer(t - 25), -1L)) |&gt;
+    filter(t &gt;= 20, t &lt;= 30)                               # rel_time in [-5, 5]
+  if (confound != 0)                                       # optional PT violation
+    d &lt;- d |&gt; mutate(y = y + if_else(g == 25, confound * (t - 25), 0))
+  feols(y ~ i(rel_time, ref = -1) | city + t, data = d, cluster = ~city)
+}
+tidy_es &lt;- function(fit) {                                 # HonestDiD-ready pieces
+  ev &lt;- as.integer(sub("rel_time::", "", names(coef(fit)))); ord &lt;- order(ev)
+  list(beta = unname(coef(fit)[ord]), sigma = vcov(fit)[ord, ord],
+       evt = ev[ord], numPre = sum(ev &lt; 0), numPost = sum(ev &gt;= 0))
+}
+```
+
+- Never-treated cities get `rel_time = -1` so they land in the base category and
+  serve as controls at every week through the time fixed effects.
+- `filter(t &gt;= 20, t &lt;= 30)` matches the calendar window to `\([-5, +5]\)` event
+  time for the `\(g = 25\)` cohort, so the time FE are estimated only where the
+  treated cohort has an event-time coefficient.
+- `order(ev)` guarantees the (pre earliest `\(\dots\)` post) ordering `HonestDiD`
+  expects. This is the step to validate against the `feols` CI.
+]
+
+&lt;a href="#application-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: l-vec-detail
+
+# Backup: Why the Average Target Is Fragile
+
+.small[
+The target is `\(\theta = \ell' \tau_{post}\)`. Two natural choices:
+
+- **First post-period:** `\(\ell = (1, 0, 0, 0, 0, 0)'\)`. Under `\(\Delta^{SD}(M)\)`
+  the worst-case bias is bounded by `\(M \cdot 1^2\)`: only one period of
+  extrapolation.
+- **Average of post:** `\(\ell = (\tfrac16, \dots, \tfrac16)'\)`. The bias at
+  horizon `\(s\)` is bounded by `\(\sim M \cdot s^2\)`, so the average is
+  `\(\frac{M}{6}\sum_{s=0}^{5} s^2 \approx M \cdot 9\)`: nine times the exposure.
+
+That is why the same panel gives `\(M^{\ast} = 0.45\)`
+for the first period but `\(M^{\ast} = 0.05\)` for the
+average, and `\(\bar M^{\ast}\)` falls from 1.50 to
+0.50. The average is not "wrong": it answers a
+different, later-horizon question that is intrinsically harder to defend against
+trend extrapolation.
+
+Practical rule: report the breakdown value **for the horizon you will act on**.
+If the decision hinges on the long-run average, its fragility is real
+information, not a nuisance.
+]
+
+&lt;a href="#target-choice-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+
+---
+
+name: sd-vs-rm-detail
+
+# Backup: The Same Confound, Two Verdicts
+
+.small[
+The injected confound is `\(0.10 \cdot (t - 25)\)` added to the treated cohort: a
+pure line through the treatment date. In event-study coordinates it shifts every
+coefficient by a linear amount.
+
+| | clean | confounded |
+|---|---|---|
+| pre-test `\(p\)` | 0.16 | 0.0001 |
+| `\(M^{\ast}\)` under `\(\Delta^{SD}\)` | 0.45 | 0.45 |
+| `\(\bar M^{\ast}\)` under `\(\Delta^{RM}\)` | 1.50 | 1.00 |
+
+- **Smoothness does not react.** A line has zero second difference, so it is
+  inside `\(\Delta^{SD}(0)\)`. The estimator extrapolates the pre-period line into
+  the post and subtracts it; the estimate and the correction move together and
+  `\(M^{\ast}\)` is untouched. `\(\Delta^{SD}\)` is *defined* to be blind to a linear
+  confound.
+- **Relative magnitudes does react.** The confound enlarges the worst pre-period
+  jump `\(D_{pre}\)`, so `\(\Delta^{RM}(\bar M)\)` permits a proportionally larger post
+  violation and the bounds widen: `\(\bar M^{\ast}\)` falls
+  1.50 `\(\to\)` 1.00.
+
+Neither is "more correct." They encode different beliefs. The takeaway: never
+read a breakdown value without stating which `\(\Delta\)` produced it and whether
+that `\(\Delta\)` can even see the confound you fear.
+]
+
+&lt;a href="#confounded-main" class="nav-btn-br"&gt;← back&lt;/a&gt;
+    </textarea>
+<style data-target="print-only">@media screen {.remark-slide-container{display:block;}.remark-slide-scaler{box-shadow:none;}}</style>
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false,
+"ratio": "16:9"
+});
+if (window.HTMLWidgets) slideshow.on('afterShowSlide', function (slide) {
+  window.dispatchEvent(new Event('resize'));
+});
+(function(d) {
+  var s = d.createElement("style"), r = d.querySelector(".remark-slide-scaler");
+  if (!r) return;
+  s.type = "text/css"; s.innerHTML = "@page {size: " + r.style.width + " " + r.style.height +"; }";
+  d.head.appendChild(s);
+})(document);
+
+(function(d) {
+  var el = d.getElementsByClassName("remark-slides-area");
+  if (!el) return;
+  var slide, slides = slideshow.getSlides(), els = el[0].children;
+  for (var i = 1; i < slides.length; i++) {
+    slide = slides[i];
+    if (slide.properties.continued === "true" || slide.properties.count === "false") {
+      els[i - 1].className += ' has-continuation';
+    }
+  }
+  var s = d.createElement("style");
+  s.type = "text/css"; s.innerHTML = "@media print { .has-continuation { display: none; } }";
+  d.head.appendChild(s);
+})(document);
+// delete the temporary CSS (for displaying all slides initially) when the user
+// starts to view slides
+(function() {
+  var deleted = false;
+  slideshow.on('beforeShowSlide', function(slide) {
+    if (deleted) return;
+    var sheets = document.styleSheets, node;
+    for (var i = 0; i < sheets.length; i++) {
+      node = sheets[i].ownerNode;
+      if (node.dataset["target"] !== "print-only") continue;
+      node.parentNode.removeChild(node);
+    }
+    deleted = true;
+  });
+})();
+// add `data-at-shortcutkeys` attribute to <body> to resolve conflicts with JAWS
+// screen reader (see PR #262)
+(function(d) {
+  let res = {};
+  d.querySelectorAll('.remark-help-content table tr').forEach(tr => {
+    const t = tr.querySelector('td:nth-child(2)').innerText;
+    tr.querySelectorAll('td:first-child .key').forEach(key => {
+      const k = key.innerText;
+      if (/^[a-z]$/.test(k)) res[k] = t;  // must be a single letter (key)
+    });
+  });
+  d.body.setAttribute('data-at-shortcutkeys', JSON.stringify(res));
+})(document);
+(function() {
+  "use strict"
+  // Replace <script> tags in slides area to make them executable
+  var scripts = document.querySelectorAll(
+    '.remark-slides-area .remark-slide-container script'
+  );
+  if (!scripts.length) return;
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement('script');
+    var code = document.createTextNode(scripts[i].textContent);
+    s.appendChild(code);
+    var scriptAttrs = scripts[i].attributes;
+    for (var j = 0; j < scriptAttrs.length; j++) {
+      s.setAttribute(scriptAttrs[j].name, scriptAttrs[j].value);
+    }
+    scripts[i].parentElement.replaceChild(s, scripts[i]);
+  }
+})();
+(function() {
+  var links = document.getElementsByTagName('a');
+  for (var i = 0; i < links.length; i++) {
+    if (/^(https?:)?\/\//.test(links[i].getAttribute('href'))) {
+      links[i].target = '_blank';
+    }
+  }
+})();
+// adds .remark-code-has-line-highlighted class to <pre> parent elements
+// of code chunks containing highlighted lines with class .remark-code-line-highlighted
+(function(d) {
+  const hlines = d.querySelectorAll('.remark-code-line-highlighted');
+  const preParents = [];
+  const findPreParent = function(line, p = 0) {
+    if (p > 1) return null; // traverse up no further than grandparent
+    const el = line.parentElement;
+    return el.tagName === "PRE" ? el : findPreParent(el, ++p);
+  };
+
+  for (let line of hlines) {
+    let pre = findPreParent(line);
+    if (pre && !preParents.includes(pre)) preParents.push(pre);
+  }
+  preParents.forEach(p => p.classList.add("remark-code-has-line-highlighted"));
+})(document);</script>
+
+<script>
+slideshow._releaseMath = function(el) {
+  var i, text, code, codes = el.getElementsByTagName('code');
+  for (i = 0; i < codes.length;) {
+    code = codes[i];
+    if (code.parentNode.tagName !== 'PRE' && code.childElementCount === 0) {
+      text = code.textContent;
+      if (/^\\\((.|\s)+\\\)$/.test(text) || /^\\\[(.|\s)+\\\]$/.test(text) ||
+          /^\$\$(.|\s)+\$\$$/.test(text) ||
+          /^\\begin\{([^}]+)\}(.|\s)+\\end\{[^}]+\}$/.test(text)) {
+        code.outerHTML = code.innerHTML;  // remove <code></code>
+        continue;
+      }
+    }
+    i++;
+  }
+};
+slideshow._releaseMath(document);
+</script>
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+(function () {
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src  = 'https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-MML-AM_CHTML';
+  if (location.protocol !== 'file:' && /^https?:/.test(script.src))
+    script.src  = script.src.replace(/^https?:/, '');
+  document.getElementsByTagName('head')[0].appendChild(script);
+})();
+</script>
+  </body>
+</html>

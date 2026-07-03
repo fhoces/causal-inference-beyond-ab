@@ -1,0 +1,1052 @@
+---
+title: "Module 3: Honest DiD"
+subtitle: "Sensitivity Bounds for Parallel Trends: Rambachan-Roth"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(fixest)
+library(HonestDiD)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r make-panel, include=FALSE}
+make_panel <- function(scenario = c("constant", "dynamic", "heterogeneous"),
+                       n_cities = 30, n_t = 60, seed = 42) {
+  scenario <- match.arg(scenario)
+  set.seed(seed)
+  cohorts <- tibble(
+    city = 1:n_cities,
+    g = c(rep(15, 8), rep(25, 8), rep(35, 8), rep(Inf, 6))
+  )
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    left_join(cohorts, by = "city") |>
+    mutate(
+      treated = t >= g,
+      cohort = case_when(g == 15 ~ "Early (g=15)", g == 25 ~ "Mid (g=25)",
+                         g == 35 ~ "Late (g=35)", TRUE ~ "Never"),
+      eff = case_when(
+        !treated ~ 0,
+        scenario == "constant"      ~ 1.0,
+        scenario == "dynamic"       ~ 0.4 * (1 + 0.10 * (t - g)),
+        scenario == "heterogeneous" ~ 0.4 * (1 + 0.10 * (t - g)) *
+                                      (1 + 0.8 * (g == 15) - 0.8 * (g == 35))
+      ),
+      y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3)
+    )
+}
+```
+
+```{r es-setup, include=FALSE}
+# Single-cohort event study: cohort g = 25 vs the six never-treated cities,
+# window rel_time in [-5, 5], clustered by city. Never-treated are pinned to
+# the base period so they serve as controls at every week through the time FE.
+event_fit <- function(scenario = "constant", confound = 0) {
+  d <- make_panel(scenario) |>
+    filter(g == 25 | !is.finite(g)) |>
+    mutate(rel_time = if_else(is.finite(g), as.integer(t - 25), -1L)) |>
+    filter(t >= 20, t <= 30)
+  if (confound != 0)
+    d <- d |> mutate(y = y + if_else(g == 25, confound * (t - 25), 0))
+  feols(y ~ i(rel_time, ref = -1) | city + t, data = d, cluster = ~city)
+}
+tidy_es <- function(fit) {
+  ev <- as.integer(sub("rel_time::", "", names(coef(fit)))); ord <- order(ev)
+  list(beta = unname(coef(fit)[ord]), sigma = vcov(fit)[ord, ord], evt = ev[ord],
+       numPre = sum(ev < 0), numPost = sum(ev >= 0))
+}
+pretest_p <- function(es) {
+  pi <- which(es$evt < 0)
+  W <- t(es$beta[pi]) %*% solve(es$sigma[pi, pi]) %*% es$beta[pi]
+  pchisq(as.numeric(W), df = length(pi), lower.tail = FALSE)
+}
+bd_value <- function(sens) {                 # first M / Mbar at which CI covers 0
+  col <- if ("M" %in% names(sens)) "M" else "Mbar"
+  incl0 <- sens$lb <= 0 & sens$ub >= 0
+  if (all(!incl0)) return(Inf)
+  min(sens[[col]][incl0])
+}
+
+fit  <- event_fit("constant")
+es   <- tidy_es(fit)
+l1   <- basisVector(1, es$numPost)                        # first post-period
+lavg <- matrix(rep(1 / es$numPost, es$numPost), ncol = 1) # average of post
+ocs1 <- constructOriginalCS(es$beta, es$sigma, es$numPre, es$numPost, l_vec = l1)
+p_clean <- pretest_p(es)
+```
+
+```{r hd-first, include=FALSE}
+sd1 <- createSensitivityResults(es$beta, es$sigma, es$numPre, es$numPost,
+         Mvec = seq(0.05, 0.6, 0.05), l_vec = l1, method = "C-LF")
+rm1 <- createSensitivityResults_relativeMagnitudes(es$beta, es$sigma,
+         es$numPre, es$numPost, Mbarvec = seq(0.25, 2, 0.25),
+         l_vec = l1, gridPoints = 80)
+```
+
+```{r hd-avg, include=FALSE}
+ocsA <- constructOriginalCS(es$beta, es$sigma, es$numPre, es$numPost, l_vec = lavg)
+sdA <- createSensitivityResults(es$beta, es$sigma, es$numPre, es$numPost,
+         Mvec = seq(0.05, 0.6, 0.05), l_vec = lavg, method = "C-LF")
+rmA <- createSensitivityResults_relativeMagnitudes(es$beta, es$sigma,
+         es$numPre, es$numPost, Mbarvec = seq(0.25, 2, 0.25),
+         l_vec = lavg, gridPoints = 80)
+```
+
+```{r hd-conf, include=FALSE}
+fitc <- event_fit("constant", confound = -0.10)
+esc  <- tidy_es(fitc)
+p_conf <- pretest_p(esc)
+sd1c <- createSensitivityResults(esc$beta, esc$sigma, esc$numPre, esc$numPost,
+          Mvec = seq(0.05, 0.6, 0.05), l_vec = l1, method = "C-LF")
+rm1c <- createSensitivityResults_relativeMagnitudes(esc$beta, esc$sigma,
+          esc$numPre, esc$numPost, Mbarvec = seq(0.25, 2, 0.25),
+          l_vec = l1, gridPoints = 80)
+```
+
+```{r power-sim, include=FALSE}
+# Roth's analytic pretrend-power simulation: draw betahat ~ N(beta_true, Sigma)
+# with Sigma from the clean fit, a linear violation of slope delta, tau = 0.
+crit <- qchisq(0.95, df = es$numPre)
+Sinv <- solve(es$sigma[which(es$evt < 0), which(es$evt < 0)])
+pre_idx <- which(es$evt < 0); post1 <- which(es$evt == 0)
+roth_sim <- function(delta, R = 3000) {
+  set.seed(100 + round(1000 * delta))
+  bt <- delta * (es$evt + 1)
+  dr <- MASS::mvrnorm(R, mu = bt, Sigma = es$sigma)
+  wald <- apply(dr[, pre_idx, drop = FALSE], 1, function(b) t(b) %*% Sinv %*% b)
+  rej <- wald > crit
+  tibble(delta = delta, power = mean(rej),
+         bias_uncond = mean(dr[, post1]),
+         bias_cond = mean(dr[!rej, post1]))
+}
+power_curve <- map_dfr(seq(0, 0.15, 0.01), roth_sim)
+corr_pp <- mean(cov2cor(es$sigma)[pre_idx, post1])
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td><b>3</b></td><td><b>Honest DiD: Sensitivity Bounds for Parallel Trends</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+Modules 1 and 2 assumed parallel trends and fixed the *staggered-timing* bias.
+This module stress-tests parallel trends itself. The tour said pre-trend tests
+are weak and Rambachan-Roth bound the damage. Here is the machinery.
+
+--
+
+**You will be able to:**
+
+1. Say precisely why a passing pre-trend test is weak evidence: low power and
+   pre-test bias, both from Roth (2022).
+2. Write the Rambachan-Roth (2023) restriction sets $\Delta^{SD}(M)$ and
+   $\Delta^{RM}(\bar M)$ and say what economic story each encodes.
+3. Report a **breakdown value**: how large a violation it takes to overturn a
+   result.
+4. Run the `HonestDiD` workflow end to end and read the sensitivity plot.
+
+--
+
+**Running application:** the single-cohort event study carved out of the
+Module 1-2 rollout: cohort $g = 25$ versus six never-treated cities.
+
+---
+
+name: pretest-critique-main
+
+# A Passing Pre-Trend Test Is Weak Evidence
+
+.pull-left[
+The event-study "pre-trend test" is a joint Wald test that the lead
+coefficients are zero. Two failures, both Roth (2022):
+
+- **Low power.** A near-linear violation is the exact shape the test cannot
+  see. Below, a slope that biases the estimate is caught well under 80% of
+  the time.
+- **Pre-test bias.** Dropping analyses that fail the test does not clean up
+  the survivors. It makes the bias **worse** (next).
+]
+
+.pull-right[
+```{r power-fig, echo=FALSE, fig.height=3.6, fig.width=5}
+ggplot(power_curve, aes(delta, power)) +
+  geom_line(linewidth = 1, color = "#c62828") +
+  geom_hline(yintercept = 0.8, linetype = "dashed") +
+  geom_hline(yintercept = 0.05, linetype = "dotted") +
+  labs(x = expression("linear pre-trend slope " * delta),
+       y = "power of pre-trend test",
+       title = "Underpowered where it matters") +
+  ylim(0, 1)
+```
+]
+
+.highlight-box[
+Same design as our application. A slope $\delta = 0.10$ biases the naive
+first-post estimate by that much yet trips the test only about
+`r round(100 * power_curve$power[which.min(abs(power_curve$delta - 0.10))])`%
+of the time.
+]
+
+<a href="#pretrend-power-detail" class="nav-btn">power derivation</a>
+<a href="#selective-inference-detail" class="nav-btn-br">pre-test bias</a>
+
+---
+
+name: rr-framework-main
+
+# The Rambachan-Roth Reframe
+
+Stack the event-study coefficients, $\hat\beta \sim \mathcal{N}(\beta, \Sigma)$,
+and split each into effect and violation:
+
+$$\beta_{post} = \underbrace{\tau_{post}}_{\text{causal effect}} + \underbrace{\delta_{post}}_{\text{PT violation}}, \qquad \beta_{pre} = \delta_{pre}.$$
+
+Exact PT is $\delta = 0$. **Drop it.** Assume only $\delta \in \Delta$ for a
+set $\Delta$ you choose.
+
+--
+
+The pre-periods estimate $\delta_{pre}$ directly, so $\Delta$ links the
+*observed* pre-violation to the *unobserved* post-violation. The target
+$\theta = \ell' \tau_{post}$ is then **partially identified**:
+
+$$\mathcal{S}(\beta, \Delta) = \left\{ \ell'(\beta_{post} - \delta_{post}) : \delta \in \Delta,\ \delta_{pre} = \beta_{pre} \right\}.$$
+
+--
+
+.blue-box[
+Honesty is paid in **width**. As $\Delta$ grows the identified set widens and
+the robust CI grows with it. The point estimate does not silently move; the
+uncertainty does.
+]
+
+<a href="#partial-id-detail" class="nav-btn">partial identification</a>
+
+---
+
+name: restriction-menu-main
+
+# The Restriction Menu
+
+Choosing $\Delta$ *is* the method. Each choice is an economic claim about the
+confounder you fear.
+
+.small[
+| $\Delta$ | Restriction | Story |
+|---|---|---|
+| $\Delta^{SD}(M)$ | second differences of $\delta$ bounded by $M$ | trend does not *accelerate* by more than $M$/period |
+| $\Delta^{RM}(\bar M)$ | post jump $\leq \bar M \times$ worst pre jump | post violation no worse than pre, scaled |
+| $\Delta^{SDPB}, \Delta^{RMB}$ | $+$ sign of $\delta_{post}$ | you know the direction of the bias |
+| $\Delta^{SDM}, \Delta^{SDI}$ | $+$ monotone $\delta$ | the trend does not reverse |
+]
+
+--
+
+.highlight-box[
+Impose only what institutional knowledge defends. A sign restriction you
+cannot justify buys a narrower interval you should not trust. Sign and
+monotonicity *combine* with $\Delta^{SD}$ or $\Delta^{RM}$; each added
+restriction shrinks the identified set.
+]
+
+---
+
+name: delta-sd-main
+
+# Smoothness: $\Delta^{SD}(M)$
+
+Bound the discrete second difference of the violation:
+
+$$\Delta^{SD}(M) = \Big\{ \delta : \big| (\delta_{s+1} - \delta_s) - (\delta_s - \delta_{s-1}) \big| \leq M \ \ \forall s \Big\}.$$
+
+- $M = 0$: violation is exactly **linear**, extrapolated from the pre-period
+  slope.
+- $M > 0$: allow curvature up to $M$ per period.
+
+--
+
+.blue-box[
+Every **linear** trend has zero second difference, so it sits in
+$\Delta^{SD}(M)$ for *all* $M \geq 0$. Under $\Delta^{SD}$ the estimator
+extrapolates the pre-period line into the post-period and nets it out. A purely
+linear confound is something $\Delta^{SD}$ **corrects for**, not something it
+flags.
+]
+
+Right when your worry is a smooth secular trend (adoption momentum, a slow
+demand shift) contaminating the comparison.
+
+<a href="#delta-sd-derivation" class="nav-btn">geometry + why linear is free</a>
+
+---
+
+name: delta-rm-main
+
+# Relative Magnitudes: $\Delta^{RM}(\bar M)$
+
+Bound the largest post jump by $\bar M$ times the largest pre jump:
+
+$$\Delta^{RM}(\bar M) = \Big\{ \delta : |\delta_{s+1} - \delta_s| \leq \bar M \cdot \max_{s' < 0} |\delta_{s'+1} - \delta_{s'}| \ \ \forall s \geq 0 \Big\}.$$
+
+The story: whatever moved the groups apart before treatment cannot suddenly
+move them much faster after. $\bar M = 1$ means the post violation is no bigger,
+period for period, than the worst wiggle already visible pre-treatment.
+
+--
+
+.highlight-box[
+Unlike $\Delta^{SD}$, this keys on the **magnitude** of the estimated
+pre-violation, so it *does* react to a linear confound: a steeper pre-trend
+raises the benchmark and widens the bounds. The default when you will not assume
+the trend is smooth, only that it does not change character at the treatment
+date.
+]
+
+<a href="#delta-rm-derivation" class="nav-btn">the RM set, formally</a>
+
+---
+
+name: breakdown-main
+
+# The Breakdown Value
+
+Do not pick one $M$. Trace the robust CI as $M$ grows and report where the
+conclusion flips:
+
+$$M^{\ast} = \sup \Big\{ M : 0 \notin \mathcal{C}_{1-\alpha}\big(\Delta^{SD}(M)\big) \Big\},$$
+
+the largest smoothness allowance under which the robust CI still excludes zero
+(and $\bar M^{\ast}$ for $\Delta^{RM}$).
+
+--
+
+.blue-box[
+It converts "is the effect significant?" into "**how large a PT violation would
+it take to make it insignificant?**" You then judge whether a violation that
+large is plausible, using the observed pre-period wiggle as the yardstick.
+$\bar M^{\ast} = 1.5$ reads directly: the post violation would have to be 1.5x
+the worst pre one.
+]
+
+<a href="#breakdown-derivation" class="nav-btn">reading it off the CI path</a>
+
+---
+
+name: robust-ci-main
+
+# How the Robust CI Is Built
+
+.small[
+| Method | Idea | Use for |
+|---|---|---|
+| **FLCI** | shortest fixed-length interval, min-max over $\Delta$ | convex, centrosymmetric $\Delta$ (e.g. $\Delta^{SD}$) |
+| **Conditional / C-LF** | invert an ARP moment-inequality test over $\mathcal{S}$ | non-centrosymmetric $\Delta$ (e.g. $\Delta^{RM}$) |
+]
+
+The conditional least-favorable hybrid (**C-LF**) of Andrews-Roth-Pakes is the
+recommended default for $\Delta^{RM}$, where FLCI does not apply.
+
+--
+
+.highlight-box[
+On this machine the FLCI solver is unavailable, so every run here uses
+**C-LF**, which is valid for both sets. For $\Delta^{SD}$ the FLCI is usually a
+touch shorter; the breakdown-value logic is identical.
+]
+
+<a href="#robust-ci-detail" class="nav-btn">FLCI vs ARP</a>
+
+---
+
+name: application-main
+
+# Application: One Clean Cohort
+
+From the Module 1-2 rollout, carve out cohort $g = 25$ (8 cities) versus the 6
+never-treated cities, window $-5$ to $+5$, clustered by city.
+
+```{r app-design, eval=FALSE}
+d <- make_panel("constant") |>
+  filter(g == 25 | !is.finite(g)) |>                  # one cohort + controls
+  mutate(rel_time = if_else(is.finite(g), t - 25L, -1L)) |> # never-tr -> base
+  filter(t >= 20, t <= 30)                            # rel_time in [-5, 5]
+feols(y ~ i(rel_time, ref = -1) | city + t, data = d, cluster = ~city)
+```
+
+--
+
+.highlight-box[
+A clustered $\Sigma$ has rank at most (clusters $- 1$). With 14 clusters, a
+$-10..+10$ window (20 coefficients) gives a rank-deficient $\Sigma$ and the
+bounds explode. The $-5..+5$ window (10 coefficients) stays under the ceiling.
+Always check the coefficient count against the cluster count.
+]
+
+<a href="#application-dgp" class="nav-btn">event-study construction</a>
+
+---
+
+name: event-study-main
+
+# The Event Study
+
+```{r es-plot, echo=FALSE, fig.height=3.8}
+tibble(rel = es$evt, b = es$beta,
+       se = sqrt(diag(es$sigma))) |>
+  add_row(rel = -1, b = 0, se = 0) |>
+  ggplot(aes(rel, b)) +
+  annotate("rect", xmin = -0.5, xmax = 5.5, ymin = -Inf, ymax = Inf,
+           alpha = 0.06, fill = "#1565c0") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = -0.5, linetype = "dotted") +
+  geom_pointrange(aes(ymin = b - 1.96 * se, ymax = b + 1.96 * se),
+                  color = "#1565c0") +
+  scale_x_continuous(breaks = -5:5) +
+  labs(x = "event time (weeks since adoption)", y = "coefficient",
+       title = "Flat-ish pre-period, a clear level shift after week 25")
+```
+
+Parallel trends holds by construction; the pre-test passes, with
+$p = `r round(p_clean, 2)`$. But "passes" is exactly what Roth warns us to distrust.
+
+---
+
+name: validate-main
+
+# First, Validate the Handoff
+
+`HonestDiD` wants `betahat` in order (earliest pre $\dots -2$, then $0 \dots K$)
+and its `sigma`. `fixest`'s `i()` already returns that order. **Confirm
+`constructOriginalCS` reproduces the `feols` CI before trusting anything.**
+
+```{r validate-code}
+ocs1 <- constructOriginalCS(es$beta, es$sigma,        # numPre = 4, numPost = 6
+                            es$numPre, es$numPost, l_vec = basisVector(1, es$numPost))
+c(honestdid_lb = ocs1$lb, honestdid_ub = ocs1$ub,
+  feols_beta   = es$beta[which(es$evt == 0)])
+```
+
+--
+
+The `HonestDiD` "original" CI is `r sprintf("[%.3f, %.3f]", ocs1$lb, ocs1$ub)`,
+matching $\hat\beta_0 \pm 1.96\,\mathrm{SE}$ for the first post-period exactly.
+Ordering is right; now the sensitivity results mean something.
+
+---
+
+name: workflow-main
+
+# The Workflow: Event Study In, Sensitivity Out
+
+```{r workflow-code, eval=FALSE}
+# smoothness: second differences bounded by each M
+sd <- createSensitivityResults(
+  betahat = es$beta, sigma = es$sigma,
+  numPrePeriods = 4, numPostPeriods = 6,
+  Mvec = seq(0.05, 0.6, 0.05),
+  l_vec = basisVector(1, 6),          # target the FIRST post-period
+  method = "C-LF")                    # FLCI solver unavailable here
+
+# relative magnitudes: post jump <= Mbar * worst pre jump
+rm <- createSensitivityResults_relativeMagnitudes(
+  betahat = es$beta, sigma = es$sigma,
+  numPrePeriods = 4, numPostPeriods = 6,
+  Mbarvec = seq(0.25, 2, 0.25), l_vec = basisVector(1, 6))
+```
+
+Two calls, one per restriction. Each returns the robust CI at every $M$ (or
+$\bar M$) in the grid. Keep the RM grid short: it is the slower of the two.
+
+---
+
+name: sd-result-main
+
+# Smoothness Sensitivity, Clean Case
+
+```{r sd-plot, echo=FALSE, fig.height=4.1}
+createSensitivityPlot(sd1, ocs1) +
+  labs(title = expression("Robust CI vs smoothness allowance " * M),
+       subtitle = "M = 0 is the original CI; the CI widens with allowed curvature")
+```
+
+The robust CI first touches zero near $M = `r sprintf("%.2f", bd_value(sd1))`$:
+that is the smoothness breakdown value $M^{\ast}$.
+
+---
+
+name: rm-result-main
+
+# Relative-Magnitudes Sensitivity, Clean Case
+
+.pull-left[
+```{r rm-plot, echo=FALSE, fig.height=3.7, fig.width=5}
+createSensitivityPlot_relativeMagnitudes(rm1, ocs1) +
+  labs(title = expression("Robust CI vs " * bar(M)))
+```
+]
+
+.pull-right[
+Breakdown values, first post-period target:
+
+.small[
+| Restriction | Breakdown |
+|---|---|
+| $\Delta^{SD}$ | $M^{\ast} = `r sprintf("%.2f", bd_value(sd1))`$ |
+| $\Delta^{RM}$ | $\bar M^{\ast} = `r sprintf("%.2f", bd_value(rm1))`$ |
+]
+
+Here the relative-magnitudes breakdown is `r sprintf("%.1f", bd_value(rm1))`, so
+the post violation would have to be `r sprintf("%.1f", bd_value(rm1))`x the worst
+pre-period wiggle to kill significance. Both are large relative to anything the
+pre-period shows.
+]
+
+.blue-box[
+**Report a number, not a verdict.** "Significant, and it survives a
+parallel-trends violation `r sprintf("%.1f", bd_value(rm1))`x the pre-period one"
+beats "the pre-trends looked flat."
+]
+
+---
+
+name: target-choice-main
+
+# The Target $\ell$ Matters
+
+Switch $\ell$ from the first post-period to the **average** of all six. The same
+data, a different estimand:
+
+.small[
+| Target $\ell$ | Original CI | $M^{\ast}$ | $\bar M^{\ast}$ |
+|---|---|---|---|
+| first post-period | `r sprintf("[%.2f, %.2f]", ocs1$lb, ocs1$ub)` | `r sprintf("%.2f", bd_value(sd1))` | `r sprintf("%.2f", bd_value(rm1))` |
+| average of post | `r sprintf("[%.2f, %.2f]", ocsA$lb, ocsA$ub)` | `r sprintf("%.2f", bd_value(sdA))` | `r sprintf("%.2f", bd_value(rmA))` |
+]
+
+--
+
+.highlight-box[
+The average is far more fragile. Under $\Delta^{SD}$ the worst-case bias at
+post-period $s$ grows like $M \cdot s^2$, so an average loading on late horizons
+is exposed to compounding extrapolation. The first post-period is the most
+robust target; long-run averages the least. Pick $\ell$ to match the estimand
+you report, and expect later horizons to be more fragile.
+]
+
+<a href="#l-vec-detail" class="nav-btn">the compounding math</a>
+
+---
+
+name: confounded-main
+
+# Confounded Case: the Restriction Must Match the Threat
+
+Inject a differential linear trend of slope $0.10$ into the treated cohort. The
+pre-test now rejects sharply, with $p = `r sprintf("%.4f", p_conf)`$. The breakdown
+values split:
+
+.small[
+| Restriction | Clean | Confounded |
+|---|---|---|
+| $\Delta^{SD}$ | $M^{\ast} = `r sprintf("%.2f", bd_value(sd1))`$ | $M^{\ast} = `r sprintf("%.2f", bd_value(sd1c))`$ |
+| $\Delta^{RM}$ | $\bar M^{\ast} = `r sprintf("%.2f", bd_value(rm1))`$ | $\bar M^{\ast} = `r sprintf("%.2f", bd_value(rm1c))`$ |
+]
+
+--
+
+.highlight-box[
+$\Delta^{RM}$ drops: the steeper pre-violation inflates the benchmark. $\Delta^{SD}$
+**does not move**: a linear trend has zero second difference, so smoothness
+extrapolates and nets it out. If you fear a smooth confound, $\Delta^{SD}$
+*assumes it continues and corrects it* (strong). If you will not assume that,
+$\Delta^{RM}$ is the honest choice.
+]
+
+<a href="#sd-vs-rm-detail" class="nav-btn">why SD is blind to a line</a>
+
+---
+
+name: power-bridge-main
+
+# One Rejection Is Not a Reliable Test
+
+In that confounded sample the pre-test rejected. So it "worked." But that is
+**one draw**.
+
+--
+
+- Whether the test *reliably* catches a trend of slope $0.10$ is a
+  repeated-sampling property.
+- The power curve on slide 3 says it is caught only about
+  `r round(100 * power_curve$power[which.min(abs(power_curve$delta - 0.10))])`%
+  of the time.
+- And conditioning on the ~`r round(100 * (1 - power_curve$power[which.min(abs(power_curve$delta - 0.10))]))`%
+  that pass makes the surviving bias **worse**, because leads and lags are
+  positively correlated, about $`r sprintf("%+.2f", corr_pp)`$ here.
+
+--
+
+.blue-box[
+The gap between "this sample rejected" and "the test reliably rejects" is the
+entire Roth (2022) argument, and the reason the deliverable is a breakdown value,
+not a pre-test $p$. `exercise.R` reproduces both facts analytically.
+]
+
+<a href="#selective-inference-detail" class="nav-btn">conditioning is worse</a>
+
+---
+
+name: workflow-checklist-main
+
+# Practitioner Checklist
+
+.small[
+| Step | What you do | Why |
+|---|---|---|
+| 1. Dimension | coefficient count $<$ cluster count | else $\Sigma$ is rank-deficient, bounds explode |
+| 2. Validate | `constructOriginalCS` $=$ `feols` CI | catches a mis-ordered `betahat` |
+| 3. Choose $\Delta$ | $\Delta^{SD}$ for smooth, $\Delta^{RM}$ for "no worse than pre" | the restriction is an economic claim |
+| 4. Breakdown | report $M^{\ast}$ / $\bar M^{\ast}$, calibrate vs pre-period | one honest number |
+| 5. Plot | show the sensitivity path, not a pass/fail | conveys the whole robustness curve |
+]
+
+--
+
+At Amazon scale (staggered launches across marketplaces, fulfillment centers,
+categories), a clean never-treated control and long pre-periods are rare, so
+"how robust is this to the parallel-trends assumption?" is asked of every
+DiD readout. This is the answer.
+
+---
+
+name: m3-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "The pre-trends look flat. Are we safe?" | Flat pre-trends are weak evidence: the test has low power against near-linear violations and pre-testing biases the survivors. Report a breakdown value, not a pass/fail. |
+| "What is a breakdown value and how do I read it?" | The largest PT violation (in $M$ or $\bar M$) under which the robust CI still excludes zero. $\bar M^{\ast} = 1.5$: the post violation would need to be 1.5x the worst pre one. |
+| "Smoothness or relative magnitudes?" | $\Delta^{SD}$ if you fear a smooth trend (it extrapolates and corrects a linear one); $\Delta^{RM}$ if you only assume the post violation is no worse than the pre. Match the restriction to the confounder. |
+| "A linear confound with a clean breakdown value under $\Delta^{SD}$: trust it?" | Only if a *linear* trend is truly your worry: $\Delta^{SD}$ nets linear trends out, so its $M^{\ast}$ is blind to them. Check $\Delta^{RM}$, which reacts. |
+| "How does this scale to our launches?" | Few clusters cap the event-study width (rank of $\Sigma$); validate the original CI; report breakdown values per horizon since later horizons are more fragile. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Rambachan and Roth (2023), *ReStud* | The framework on these slides: the sets $\Delta$, partial identification, robust CIs, breakdown values. |
+| Roth (2022), *AER: Insights* | Pre-trend tests have low power; conditioning on passing distorts inference. The exercise reproduces both. |
+| Andrews, Roth and Pakes (2023), *ReStud* | The conditional moment-inequality inference (ARP / C-LF) behind the robust CIs. |
+| Roth, Sant'Anna, Bilinski and Poe (2023), *J. Econometrics* | Where honest DiD sits in the modern DiD toolbox. |
+| Manski (2003) | The partial-identification tradition the whole approach descends from. |
+]
+
+**Next module:** synthetic control, a different answer to "what is the
+counterfactual trend?" that reweights donors instead of assuming parallelism.
+
+**Drill:** `exercise.R` reproduces the Roth power simulation analytically and
+computes breakdown values, clean vs confounded.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: pretrend-power-detail
+
+# Backup: Roth's Power Calculation, Analytically
+
+.small[
+No panel re-simulation needed. Fit the event study **once** to get $\Sigma$, then
+draw $\hat\beta \sim \mathcal{N}(\beta_{true}, \Sigma)$. Impose a linear
+violation of slope $\delta$ and no true effect:
+
+$$\beta_{true, s} = \delta \cdot (s + 1) \quad (\text{relative to base period } -1).$$
+
+For each draw, the pre-trend Wald statistic is
+$\hat\beta_{pre}' \Sigma_{pre}^{-1} \hat\beta_{pre}$; power is the share exceeding
+$\chi^2_{0.95, k_{pre}}$.
+
+```{r roth-show, eval=FALSE}
+roth_sim <- function(delta, R = 3000) {
+  bt <- delta * (evt + 1)                         # linear trend, tau = 0
+  dr <- MASS::mvrnorm(R, mu = bt, Sigma = Sigma)
+  wald <- apply(dr[, pre_idx], 1, function(b) t(b) %*% solve(Sigma_pre) %*% b)
+  mean(wald > qchisq(0.95, df = numPre))          # power
+}
+```
+
+Because $\hat\beta_{pre}$ is Gaussian, this is exact, not Monte Carlo error on a
+DGP. The worst-case linear slope is the one the test is *least* able to see, and
+that is precisely the slope that biases the post estimate most. Low power is
+structural, not a small-sample accident.
+]
+
+<a href="#pretest-critique-main" class="nav-btn-br">← back</a>
+
+---
+
+name: selective-inference-detail
+
+# Backup: Why Conditioning Makes Bias Worse
+
+.small[
+The naive first-post estimate is unbiased *for the biased estimand*
+$\tau + \delta$: unconditionally $\mathbb{E}[\hat\beta_0] = \delta$ (here
+$\tau = 0$). A "pre-test estimator" keeps only draws that pass, i.e. draws whose
+$\hat\beta_{pre}$ landed near zero.
+
+The violation pushes $\beta_{pre}$ *away* from zero, so a draw passes when noise
+pushes it *back*. Leads and lags share the base period $-1$, so
+$\mathrm{Cov}(\hat\beta_{pre}, \hat\beta_0) > 0$, about
+$`r sprintf("%+.2f", corr_pp)`$ here. The same noise that shrank the leads
+inflated the lag:
+
+$$\big|\mathbb{E}[\hat\beta_0 \mid \text{pass}]\big| \; > \; \big|\mathbb{E}[\hat\beta_0]\big|.$$
+
+| $\delta$ | naive bias | bias $\mid$ passed |
+|---|---|---|
+| 0.06 | `r sprintf("%.3f", power_curve$bias_uncond[which.min(abs(power_curve$delta-0.06))])` | `r sprintf("%.3f", power_curve$bias_cond[which.min(abs(power_curve$delta-0.06))])` |
+| 0.10 | `r sprintf("%.3f", power_curve$bias_uncond[which.min(abs(power_curve$delta-0.10))])` | `r sprintf("%.3f", power_curve$bias_cond[which.min(abs(power_curve$delta-0.10))])` |
+
+At $\delta = 0.10$ pre-testing roughly **doubles** the bias. Screening on
+pre-trends does not rescue you; it selects the samples where the trend hid.
+]
+
+<a href="#pretest-critique-main" class="nav-btn-br">← back</a>
+
+---
+
+name: partial-id-detail
+
+# Backup: The Identified Set, Concretely
+
+.small[
+Only the sum $\tau_{post} + \delta_{post}$ is observed. Fix the pre-period at its
+estimate, $\delta_{pre} = \beta_{pre}$, and sweep $\delta_{post}$ over everything
+$\Delta$ permits given that pre-period. The set of target values consistent with
+the data is
+
+$$\mathcal{S}(\beta, \Delta) = \Big\{ \ell'\big(\beta_{post} - \delta_{post}\big) : (\beta_{pre}, \delta_{post}) \in \Delta \Big\}.$$
+
+- If $\Delta = \{0\}$ (exact PT), $\mathcal{S}$ is the point $\ell'\beta_{post}$:
+  the usual event-study estimate.
+- If $\Delta = \mathbb{R}^{k}$ (anything goes), $\mathcal{S} = \mathbb{R}$:
+  nothing is identified without a control-trend assumption.
+- The useful sets sit in between: big enough to be credible, small enough to say
+  something.
+
+Inference then covers the *set*, not a point. Two flavors: cover the whole
+identified set, or cover the true parameter (the ARP conditional approach, less
+conservative). `HonestDiD` does the latter.
+]
+
+<a href="#rr-framework-main" class="nav-btn-br">← back</a>
+
+---
+
+name: delta-sd-derivation
+
+# Backup: $\Delta^{SD}$ Geometry and the Free Linear Trend
+
+.small[
+Write the violation path $\delta_{-k}, \dots, \delta_{-1}=0, \delta_0, \dots$.
+The second difference $\Delta^2 \delta_s = \delta_{s+1} - 2\delta_s + \delta_{s-1}$
+is the discrete curvature. $\Delta^{SD}(M)$ caps $|\Delta^2 \delta_s| \leq M$
+everywhere.
+
+Decompose any path into a **linear** part (fixed by the two base-adjacent
+points) plus curvature. $\Delta^2$ annihilates the linear part, so:
+
+- The linear component is *unrestricted* by $\Delta^{SD}(M)$ for any $M$. The
+  identified set is centered on the linear extrapolation of the pre-trend.
+- $M$ controls only how far the post path may bow away from that line. The
+  worst-case deviation at post-period $s$ grows like $M \cdot s^2$ (curvature
+  integrated twice), which is why late horizons blow up first.
+
+Consequence: shifting the whole sample by a linear confound moves the estimate
+and the extrapolation **together**, leaving $M^{\ast}$ unchanged (slide
+[confounded case](#confounded-main)). $\Delta^{SD}$ answers "how much curvature
+can I tolerate?", never "is there a line?".
+]
+
+<a href="#delta-sd-main" class="nav-btn-br">← back</a>
+
+---
+
+name: delta-rm-derivation
+
+# Backup: $\Delta^{RM}$, Formally
+
+.small[
+Let the first difference be $\Delta \delta_s = \delta_{s+1} - \delta_s$ (the
+period-to-period change in the violation). Define the worst pre-period change
+
+$$D_{pre} = \max_{s' < 0} |\Delta \delta_{s'}|,$$
+
+which the pre-period coefficients estimate. $\Delta^{RM}(\bar M)$ requires every
+post-period change to obey
+
+$$|\Delta \delta_s| \leq \bar M \cdot D_{pre}, \qquad s \geq 0.$$
+
+- The set is a scaled cone anchored to the *observed* pre-period wiggle, not an
+  absolute magnitude, hence "relative."
+- It is **not centrosymmetric**, so FLCI does not apply and inference uses the
+  ARP conditional / C-LF construction.
+- A steeper pre-trend raises $D_{pre}$, enlarges the set, and lowers
+  $\bar M^{\ast}$: the restriction reacts to exactly the linear confound that
+  $\Delta^{SD}$ ignores.
+
+Reach for $\Delta^{RM}$ when you are unwilling to assume smoothness but will
+assume the post-period trend is no wilder than the pre-period one.
+]
+
+<a href="#delta-rm-main" class="nav-btn-br">← back</a>
+
+---
+
+name: breakdown-derivation
+
+# Backup: Reading the Breakdown Value Off the CI Path
+
+.small[
+For each $M$, `HonestDiD` returns a robust CI $[\text{lb}(M), \text{ub}(M)]$.
+Both endpoints move monotonically outward in $M$ (a bigger $\Delta$ can only
+enlarge the identified set). Define the breakdown value as the first $M$ at
+which the CI covers zero:
+
+$$M^{\ast} = \min\{ M : \text{lb}(M) \leq 0 \leq \text{ub}(M) \}.$$
+
+Practically, run a grid and find where $\text{lb}(M)$ crosses zero. In the clean
+case, $\text{lb}$ falls from `r sprintf("%.2f", sd1$lb[1])` at $M = 0.05$ through
+zero near $M = `r sprintf("%.2f", bd_value(sd1))`$:
+
+```{r bd-show, echo=FALSE}
+sd1 |> transmute(M, lb = round(lb, 3), ub = round(ub, 3),
+                 excludes_0 = !(lb <= 0 & ub >= 0)) |> head(10)
+```
+
+Report $M^{\ast}$ with its yardstick: "the effect survives curvature up to
+$M^{\ast}$, versus a pre-period second difference of at most (observed value)."
+A breakdown value without a scale to compare it to is not yet an argument.
+]
+
+<a href="#breakdown-main" class="nav-btn-br">← back</a>
+
+---
+
+name: robust-ci-detail
+
+# Backup: FLCI vs the ARP Conditional Approach
+
+.small[
+**FLCI** (fixed-length CI). Restrict to affine estimators $a + v'\hat\beta$ and
+choose $v$ to minimize the CI length subject to worst-case coverage over
+$\delta \in \Delta$. This is a tractable convex program **only when $\Delta$ is
+convex and centrosymmetric**, i.e. $\delta \in \Delta \Rightarrow -\delta \in \Delta$,
+which $\Delta^{SD}(M)$ satisfies but $\Delta^{RM}(\bar M)$ does not. FLCI gives the
+shortest honest interval when it applies.
+
+**ARP conditional (Andrews-Roth-Pakes).** Cast $\delta \in \Delta$ as linear
+moment inequalities and invert a test of $H_0: \theta = \theta_0$ over a grid of
+$\theta_0$. The conditional test corrects for the fact that which inequalities
+bind is data-dependent. The **least-favorable hybrid (C-LF)** blends a
+least-favorable first stage with the conditional test for power. It is valid for
+*any* polyhedral $\Delta$, so it covers $\Delta^{RM}$ and the combined sets.
+
+Rule of thumb: $\Delta^{SD}$ alone -> FLCI (shortest); anything with relative
+magnitudes, signs, or monotonicity -> C-LF. Here FLCI is unavailable, so C-LF is
+used throughout, at a small length cost for $\Delta^{SD}$.
+]
+
+<a href="#robust-ci-main" class="nav-btn-br">← back</a>
+
+---
+
+name: application-dgp
+
+# Backup: Building the Event Study
+
+.small[
+```{r es-dgp-show, eval=FALSE}
+event_fit <- function(scenario = "constant", confound = 0) {
+  d <- make_panel(scenario) |>
+    filter(g == 25 | !is.finite(g)) |>                     # one cohort + never-tr
+    mutate(rel_time = if_else(is.finite(g), as.integer(t - 25), -1L)) |>
+    filter(t >= 20, t <= 30)                               # rel_time in [-5, 5]
+  if (confound != 0)                                       # optional PT violation
+    d <- d |> mutate(y = y + if_else(g == 25, confound * (t - 25), 0))
+  feols(y ~ i(rel_time, ref = -1) | city + t, data = d, cluster = ~city)
+}
+tidy_es <- function(fit) {                                 # HonestDiD-ready pieces
+  ev <- as.integer(sub("rel_time::", "", names(coef(fit)))); ord <- order(ev)
+  list(beta = unname(coef(fit)[ord]), sigma = vcov(fit)[ord, ord],
+       evt = ev[ord], numPre = sum(ev < 0), numPost = sum(ev >= 0))
+}
+```
+
+- Never-treated cities get `rel_time = -1` so they land in the base category and
+  serve as controls at every week through the time fixed effects.
+- `filter(t >= 20, t <= 30)` matches the calendar window to $[-5, +5]$ event
+  time for the $g = 25$ cohort, so the time FE are estimated only where the
+  treated cohort has an event-time coefficient.
+- `order(ev)` guarantees the (pre earliest $\dots$ post) ordering `HonestDiD`
+  expects. This is the step to validate against the `feols` CI.
+]
+
+<a href="#application-main" class="nav-btn-br">← back</a>
+
+---
+
+name: l-vec-detail
+
+# Backup: Why the Average Target Is Fragile
+
+.small[
+The target is $\theta = \ell' \tau_{post}$. Two natural choices:
+
+- **First post-period:** $\ell = (1, 0, 0, 0, 0, 0)'$. Under $\Delta^{SD}(M)$
+  the worst-case bias is bounded by $M \cdot 1^2$: only one period of
+  extrapolation.
+- **Average of post:** $\ell = (\tfrac16, \dots, \tfrac16)'$. The bias at
+  horizon $s$ is bounded by $\sim M \cdot s^2$, so the average is
+  $\frac{M}{6}\sum_{s=0}^{5} s^2 \approx M \cdot 9$: nine times the exposure.
+
+That is why the same panel gives $M^{\ast} = `r sprintf("%.2f", bd_value(sd1))`$
+for the first period but $M^{\ast} = `r sprintf("%.2f", bd_value(sdA))`$ for the
+average, and $\bar M^{\ast}$ falls from `r sprintf("%.2f", bd_value(rm1))` to
+`r sprintf("%.2f", bd_value(rmA))`. The average is not "wrong": it answers a
+different, later-horizon question that is intrinsically harder to defend against
+trend extrapolation.
+
+Practical rule: report the breakdown value **for the horizon you will act on**.
+If the decision hinges on the long-run average, its fragility is real
+information, not a nuisance.
+]
+
+<a href="#target-choice-main" class="nav-btn-br">← back</a>
+
+---
+
+name: sd-vs-rm-detail
+
+# Backup: The Same Confound, Two Verdicts
+
+.small[
+The injected confound is $0.10 \cdot (t - 25)$ added to the treated cohort: a
+pure line through the treatment date. In event-study coordinates it shifts every
+coefficient by a linear amount.
+
+| | clean | confounded |
+|---|---|---|
+| pre-test $p$ | `r sprintf("%.2f", p_clean)` | `r sprintf("%.4f", p_conf)` |
+| $M^{\ast}$ under $\Delta^{SD}$ | `r sprintf("%.2f", bd_value(sd1))` | `r sprintf("%.2f", bd_value(sd1c))` |
+| $\bar M^{\ast}$ under $\Delta^{RM}$ | `r sprintf("%.2f", bd_value(rm1))` | `r sprintf("%.2f", bd_value(rm1c))` |
+
+- **Smoothness does not react.** A line has zero second difference, so it is
+  inside $\Delta^{SD}(0)$. The estimator extrapolates the pre-period line into
+  the post and subtracts it; the estimate and the correction move together and
+  $M^{\ast}$ is untouched. $\Delta^{SD}$ is *defined* to be blind to a linear
+  confound.
+- **Relative magnitudes does react.** The confound enlarges the worst pre-period
+  jump $D_{pre}$, so $\Delta^{RM}(\bar M)$ permits a proportionally larger post
+  violation and the bounds widen: $\bar M^{\ast}$ falls
+  `r sprintf("%.2f", bd_value(rm1))` $\to$ `r sprintf("%.2f", bd_value(rm1c))`.
+
+Neither is "more correct." They encode different beliefs. The takeaway: never
+read a breakdown value without stating which $\Delta$ produced it and whether
+that $\Delta$ can even see the confound you fear.
+]
+
+<a href="#confounded-main" class="nav-btn-br">← back</a>
