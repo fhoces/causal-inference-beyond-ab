@@ -1,0 +1,990 @@
+---
+title: "Module 6: Causal Forest"
+subtitle: "Honest Splitting, Asymptotics, and HTE Diagnostics"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(grf)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r make-hte, include=FALSE}
+make_hte_data <- function(n = 6000, seed = 42) {
+  set.seed(seed)
+  tibble(
+    density  = runif(n),                        # city density percentile
+    tenure   = pmin(rexp(n, 1 / 18), 90),       # months on platform
+    peak_shr = rbeta(n, 2, 3),                  # share of hours in peak
+    rating   = pmin(pmax(rnorm(n, 4.7, 0.2), 3.5), 5),
+    w        = rbinom(n, 1, 0.5),
+    tau      = 1.5 * density - 0.02 * tenure + 2.0 * density * peak_shr,
+    y        = 10 + 5 * density + 0.05 * tenure + 3 * peak_shr +
+               tau * w + rnorm(n, 0, 2)
+  )
+}
+d  <- make_hte_data(6000, seed = 42)
+te <- make_hte_data(2000, seed = 99)   # held-out grid for coverage
+X  <- as.matrix(d[,  c("density", "tenure", "peak_shr", "rating")])
+Xte <- as.matrix(te[, c("density", "tenure", "peak_shr", "rating")])
+```
+
+```{r cf-compute, include=FALSE}
+# Fit ONCE, reuse across every downstream slide.
+cf <- causal_forest(X, d$y, d$w, W.hat = 0.5, num.trees = 2000, seed = 42)
+pr <- predict(cf, estimate.variance = TRUE)
+d$tau_hat <- pr$predictions
+d$se      <- sqrt(pr$variance.estimates)
+ate  <- average_treatment_effect(cf)
+cal  <- test_calibration(cf)
+blp  <- best_linear_projection(cf, X)
+rate_good <- rank_average_treatment_effect(cf, d$tau_hat)
+rate_bad  <- rank_average_treatment_effect(cf, d$rating)
+cate_rmse <- sqrt(mean((d$tau_hat - d$tau)^2))
+insample_cov <- mean(abs(d$tau_hat - d$tau) <= 1.96 * d$se)
+
+# tidy a coeftest object (test_calibration / best_linear_projection) for kable
+coef_tab <- function(ct) {
+  m <- unclass(ct)
+  data.frame(term = rownames(m),
+             Estimate     = round(m[, 1], 3),
+             `Std. Error` = round(m[, 2], 3),
+             `t value`    = round(m[, 3], 2),
+             `p value`    = format.pval(m[, 4], digits = 2, eps = 1e-3),
+             row.names = NULL, check.names = FALSE)
+}
+
+# Honest vs dishonest, evaluated on the held-out grid
+grid_stats <- function(honest) {
+  f <- causal_forest(X, d$y, d$w, W.hat = 0.5, num.trees = 2000,
+                     honesty = honest, seed = 42)
+  p <- predict(f, Xte, estimate.variance = TRUE)
+  s <- sqrt(p$variance.estimates)
+  tibble(honesty = ifelse(honest, "honest", "adaptive"),
+         rmse = sqrt(mean((p$predictions - te$tau)^2)),
+         mean_se = mean(s),
+         coverage = mean(abs(p$predictions - te$tau) <= 1.96 * s))
+}
+ablation <- bind_rows(grid_stats(TRUE), grid_stats(FALSE))
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td><b>6</b></td><td><b>Causal Forest: Honest Splitting and Asymptotics</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+The experimentation-refresher tour showed *that* a causal forest estimates
+$\tau(x)$ with honest trees. This module is the formal treatment.
+
+--
+
+**You will be able to:**
+
+1. State the honesty split and explain why honesty plus *subsampling*
+   (not bootstrap) yields a pointwise central limit theorem for
+   $\hat\tau(x)$, and list the conditions.
+2. Read a forest as an adaptive-kernel solver of a local moment condition,
+   and say why that view generalizes to quantile, IV, and survival forests.
+3. Explain the R-learner orthogonalization `grf` runs, and why it helps even
+   in a clean RCT.
+4. Run the full diagnostic stack live: calibration test, best linear
+   projection, RATE, and (in simulation) coverage.
+
+--
+
+**Running application:** a randomized push-notification experiment on 6000
+drivers. Effect heterogeneity by city density, tenure, and peak-hour share;
+`rating` is a deliberate nuisance covariate.
+
+---
+
+name: estimand-main
+
+# The Estimand and the Prize
+
+The conditional average treatment effect:
+
+$$\tau(x) = \mathbb{E}\!\left[Y(1) - Y(0) \mid X = x\right]$$
+
+Never observed, not even noisily: no unit reveals both potential outcomes.
+A forest estimates it through *local* treated-minus-control comparisons.
+
+--
+
+.pull-left[
+**What a black box gives you**
+
+A T-learner, boosted trees, a neural net: a prediction $\hat\tau(x)$. No
+honest uncertainty. You cannot say whether a high $\hat\tau(x)$ is signal or
+an artifact of where the model split.
+]
+
+.pull-right[
+**What a causal forest adds**
+
+A **pointwise confidence interval**: $\hat\tau(x) \pm 1.96\,\widehat{\text{se}}(x)$
+with asymptotically valid coverage at each fixed $x$. That interval is the
+entire reason to prefer a forest over an off-the-shelf regressor.
+]
+
+--
+
+.highlight-box[
+The rest of the module is about what makes that interval *valid*: honesty
+kills the bias, subsampling delivers normality, and the infinitesimal
+jackknife estimates the variance.
+]
+
+---
+
+name: honest-tree-main
+
+# Honest Trees: the Split-Sample Trick
+
+An **adaptive** tree uses the same data to choose splits and to estimate
+leaf effects. The split is chosen to make leaves look different, so the leaf
+estimate reuses the noise that placed the split: a within-sample winner's
+curse. Apparent heterogeneity appears even when $\tau(x)$ is constant.
+
+--
+
+**Honesty** partitions each tree's subsample into two disjoint halves:
+
+.small[
+| Half | Symbol | Job |
+|---|---|---|
+| Splitting | $\mathcal{J}$ | decide the tree structure: covariate + threshold at every node |
+| Estimation | $\mathcal{I}$ | dropped down the finished tree; leaf effect uses **only** these points |
+]
+
+--
+
+Because $\mathcal{I}$ never touched the split placement, the leaf estimate is
+conditionally unbiased for the average effect over that leaf. The forest
+averages honest trees over many subsamples.
+
+.blue-box[
+The cost is efficiency: each tree estimates from only half its subsample. You
+trade *variance* (which widens the CI) for *bias* (which would invalidate it).
+]
+
+<a href="#honesty-proof" class="nav-btn">why this gives a CLT</a>
+
+---
+
+name: subsample-main
+
+# Subsampling, Not Bootstrap
+
+Wager and Athey build the forest from **subsamples** of size $s$ drawn
+without replacement. This is an inferential choice, not a computational one.
+
+--
+
+- A forest of subsampled trees is a **U-statistic**: an average of a
+  symmetric kernel over subsets of the data.
+- The Hajek projection of a U-statistic is asymptotically normal, and its
+  variance is estimable by an **infinitesimal jackknife**.
+- Bootstrap resampling breaks the clean U-statistic structure that both the
+  CLT and the variance estimator rely on.
+
+--
+
+.small[
+The subsample size must grow slowly: $s = n^{\beta}$ with $\beta \in (0,1)$
+and $\beta$ bounded below, so $s/n \to 0$. Trees must be
+$\alpha$-regular: every split leaves at least a fraction $\alpha$ of the
+parent on each side, so no leaf collapses onto a vanishing neighborhood.
+]
+
+.highlight-box[
+`grf` returns the jackknife variance as `variance.estimates`. That single
+vector is what turns a prediction machine into an inference machine.
+]
+
+---
+
+name: normality-main
+
+# Pointwise Normality: What You Get, What You Do Not
+
+.small[
+**Theorem (Wager and Athey 2018, informal).** Under honesty,
+$\alpha$-regularity, an admissible subsample rate $s = n^\beta$, overlap
+$0 < \eta \le e(x) \le 1-\eta$, and Lipschitz smoothness of $\tau$ and the
+nuisances,
+]
+
+$$\frac{\hat\tau(x) - \tau(x)}{\sqrt{\operatorname{Var}[\hat\tau(x)]}}
+\;\xrightarrow{d}\; \mathcal{N}(0, 1).$$
+
+Honesty makes the bias asymptotically negligible *relative to* the standard
+error, so the ratio centers at zero and $\hat\tau(x) \pm 1.96\,\widehat{\text{se}}$
+covers.
+
+--
+
+.pull-left[
+.blue-box[
+**You get:** a valid CI at each fixed $x$. Pointwise.
+]
+]
+
+.pull-right[
+.highlight-box[
+**You do NOT get:** uniform inference. No confidence *band* over all $x$; no
+"the effect is positive everywhere". Do not union pointwise CIs into a
+whole-function claim.
+]
+]
+
+--
+
+For questions about the *shape* of $\tau(\cdot)$, use the aggregate
+diagnostics later in this deck (calibration, BLP, RATE), never a naive union
+of pointwise intervals.
+
+---
+
+name: grf-weights-main
+
+# Generalized Random Forests: Forest as Adaptive Kernel
+
+Athey, Tibshirani and Wager (2019) reframe the forest as a producer of
+**data-adaptive weights**. For a target $x$, tree $b$ drops $x$ to leaf
+$L_b(x)$; training point $i$ gets weight $1/|L_b(x)|$ if it shares that leaf.
+Average over trees:
+
+$$\alpha_i(x) = \frac{1}{B}\sum_{b=1}^{B}
+\frac{\mathbb{1}\{X_i \in L_b(x)\}}{|L_b(x)|},
+\qquad \sum_i \alpha_i(x) = 1.$$
+
+--
+
+The forest is a **weighted nearest-neighbor** method whose metric is learned:
+points that keep landing in $x$'s leaf are its neighbors, and the splitting
+rule decides "near" in the directions that matter for the *effect*, not the
+outcome level.
+
+--
+
+.highlight-box[
+This is the unifying idea. Every GRF estimate, causal, quantile, IV, is a
+*local* estimate using these same $\alpha_i(x)$ weights. `get_forest_weights`
+returns the full matrix.
+]
+
+<a href="#adaptive-nn-detail" class="nav-btn">who gets weight, visualized</a>
+
+---
+
+name: grf-moment-main
+
+# The Local Moment Condition
+
+GRF estimates $\theta(x)$ defined by a **local estimating equation**, solved
+with the forest weights:
+
+$$\mathbb{E}\!\left[\psi_{\theta(x)}(O_i)\mid X_i = x\right] = 0
+\;\;\Longrightarrow\;\;
+\hat\theta(x) = \arg\min_\theta
+\left\|\sum_i \alpha_i(x)\,\psi_\theta(O_i)\right\|.$$
+
+--
+
+For the causal forest the score is the **residual-on-residual** moment
+
+$$\psi_\tau(O_i) = \big(Y_i - \hat m(X_i) - \tau\,(W_i - \hat e(X_i))\big)
+\,(W_i - \hat e(X_i)),$$
+
+so the local solution is a weighted regression of residualized outcome on
+residualized treatment: a **local Robinson (1988) partially linear**
+estimator.
+
+--
+
+.blue-box[
+Swap $\psi$ and you get a different forest with the *same* weights: the IV
+moment gives instrumental forests, the check function gives quantile forests,
+a partial-likelihood score gives survival forests. That is why it is
+"generalized".
+]
+
+<a href="#grf-derivation" class="nav-btn">gradient-based splitting</a>
+
+---
+
+name: rlearner-main
+
+# Local Centering and the R-Learner
+
+Before growing the causal forest, `grf` **orthogonalizes**: fit
+$\hat m(x) = \mathbb{E}[Y\mid X=x]$ and $\hat e(x) = \mathbb{E}[W\mid X=x]$
+with separate regression forests, then grow on the residuals. This minimizes
+the **R-learner** objective (Nie and Wager 2021):
+
+$$\sum_i \big[(Y_i - \hat m(X_i)) - \tau(X_i)(W_i - \hat e(X_i))\big]^2.$$
+
+--
+
+The estimate becomes **Neyman-orthogonal**: first-order insensitive to small
+errors in $\hat m$ and $\hat e$. Two payoffs.
+
+- Confounding by a smooth prognostic signal is projected out through
+  $\hat m$, so splits chase effect *heterogeneity*, not the main effect.
+- Even in an RCT with $e(x)\equiv 0.5$, chance covariate imbalance means the
+  finite-sample association between $W$ and $X$ is not exactly zero. Centering
+  on $\hat m(x)$ strips the prognostic variance out of $Y$ and sharpens
+  $\hat\tau(x)$.
+
+--
+
+.highlight-box[
+In a randomized experiment, set `W.hat = 0.5`: the propensity is *known*, so
+the forest should not spend data estimating it or risk injecting propensity
+noise.
+]
+
+<a href="#rlearner-detail" class="nav-btn">why orthogonality protects</a>
+
+---
+
+name: cf-fit-main
+
+# The Application: Fit the Forest
+
+Shared HTE DGP: 6000 drivers, randomized push $w$, weekly trips $y$. True
+$\tau = 1.5\,\text{density} - 0.02\,\text{tenure} + 2.0\,\text{density}\cdot\text{peak share}$;
+`rating` is nuisance.
+
+```{r cf-fit-show, eval=FALSE}
+X  <- as.matrix(d[, c("density", "tenure", "peak_shr", "rating")])
+cf <- causal_forest(X, Y = d$y, W = d$w,
+                    W.hat = 0.5,        # KNOWN propensity: it's an RCT
+                    num.trees = 2000, seed = 42)
+average_treatment_effect(cf)            # AIPW: doubly robust ATE
+```
+
+```{r ate-out, echo=FALSE}
+knitr::kable(t(round(ate, 3)), format = "html")
+```
+
+--
+
+.pull-left[
+.small[
+True mean effect: **`r round(mean(d$tau), 2)`** trips/wk.
+AIPW ATE: **`r round(ate[["estimate"]], 2)`** (se `r round(ate[["std.err"]], 2)`).
+The forest recovers the average.
+]
+]
+
+.pull-right[
+.blue-box[
+The AIPW score (augmented inverse-propensity weighting) combines the
+outcome model and the propensity into a doubly-robust average: consistent if
+*either* is right.
+]
+]
+
+<a href="#cf-dgp" class="nav-btn">DGP code</a>
+
+---
+
+name: cate-scatter-main
+
+# Does $\hat\tau(x)$ Track the Truth?
+
+```{r cate-scatter, echo=FALSE, fig.height=4.4}
+d |>
+  ggplot(aes(tau, tau_hat, color = density)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  geom_point(alpha = 0.35, size = 1) +
+  scale_color_viridis_c(name = "density") +
+  labs(x = expression("True " * tau(x)), y = expression("Forest " * hat(tau)(x)),
+       title = sprintf("CATE recovery: RMSE = %.3f (n = 6000, 2000 trees)", cate_rmse)) +
+  coord_equal()
+```
+
+Points hug the 45-degree line; the spread is honest estimation noise, not
+bias. Density (color) orders cleanly, exactly the DGP's dominant driver.
+
+---
+
+name: coverage-main
+
+# Pointwise Intervals and Their Coverage
+
+`predict(cf, estimate.variance = TRUE)` returns the jackknife variance. On a
+**held-out grid** (fresh 2000 drivers) we can check coverage against the
+known $\tau$.
+
+```{r coverage-plot, echo=FALSE, fig.height=3.4}
+pte <- predict(cf, Xte, estimate.variance = TRUE)
+te2 <- te |> mutate(pr = pte$predictions, se = sqrt(pte$variance.estimates)) |>
+  arrange(density) |> slice(round(seq(1, n(), length.out = 60)))
+ggplot(te2, aes(density, pr)) +
+  geom_ribbon(aes(ymin = pr - 1.96 * se, ymax = pr + 1.96 * se),
+              alpha = 0.2, fill = "#1565c0") +
+  geom_point(aes(y = tau, color = "true tau(x)"), size = 1.6) +
+  geom_line(aes(color = "forest tau-hat"), linewidth = 0.8) +
+  scale_color_manual(values = c("forest tau-hat" = "#1565c0", "true tau(x)" = "#e65100"),
+                     name = NULL) +
+  labs(x = "density", y = expression(tau),
+       title = "60 held-out drivers: 95% pointwise CIs vs the truth") +
+  theme(legend.position = "bottom")
+```
+
+.small[
+Held-out coverage: **`r round(ablation$coverage[ablation$honesty == "honest"], 2)`** at nominal 0.95. Close, and the exercise verifies it over many refits.
+]
+
+---
+
+name: hte-plots-main
+
+# Where the Effect Lives
+
+```{r hte-plots, echo=FALSE, fig.height=3.7}
+bind_rows(
+  d |> transmute(x = density, tau_hat, var = "density"),
+  d |> transmute(x = tenure / 90, tau_hat, var = "tenure (scaled 0-1)")
+) |>
+  ggplot(aes(x, tau_hat)) +
+  geom_point(alpha = 0.15, size = 0.8, color = "grey50") +
+  geom_smooth(method = "loess", color = "#1565c0", se = FALSE) +
+  facet_wrap(~var, scales = "free_x") +
+  labs(x = NULL, y = expression(hat(tau)(x)),
+       title = "Forest CATE rises steeply in density, drifts down in tenure")
+```
+
+The forest reproduces the DGP's structure without being told the functional
+form: strong positive gradient in density, mild negative slope in tenure.
+
+---
+
+name: calibration-main
+
+# Diagnostic 1: the Calibration Test
+
+`test_calibration` regresses the effect on two constructed regressors: the
+**mean** forest prediction and the **differential** (demeaned) prediction.
+
+```{r cal-show, eval=FALSE}
+test_calibration(cf)
+```
+
+```{r cal-out, echo=FALSE}
+knitr::kable(coef_tab(cal), format = "html", row.names = FALSE)
+```
+
+--
+
+.small[
+- `mean.forest.prediction` $\approx$ **`r round(cal["mean.forest.prediction","Estimate"], 2)`**: the forest's average effect is calibrated (coefficient near 1).
+- `differential.forest.prediction` $\approx$ **`r round(cal["differential.forest.prediction","Estimate"], 2)`**, highly significant: the forest's *ranking* of who responds carries real signal.
+]
+
+.highlight-box[
+This is the omnibus "is there any heterogeneity?" test. A differential
+coefficient near zero or insignificant means stop: report the ATE, do not
+model heterogeneity that is not there.
+]
+
+---
+
+name: blp-main
+
+# Diagnostic 2: Best Linear Projection
+
+`best_linear_projection` reports the best linear approximation to $\tau(x)$
+with robust SEs, the interpretable summary you show a stakeholder.
+
+```{r blp-show, eval=FALSE}
+best_linear_projection(cf, X)   # X = density, tenure, peak_shr, rating
+```
+
+```{r blp-out, echo=FALSE}
+knitr::kable(coef_tab(blp), format = "html", row.names = FALSE)
+```
+
+--
+
+.small[
+- density **`r round(blp["density","Estimate"], 2)`**, tenure **`r round(blp["tenure","Estimate"], 3)`**, peak_shr **`r round(blp["peak_shr","Estimate"], 2)`**: signs and magnitudes track the DGP.
+- `rating` coefficient is indistinguishable from zero, $p = `r round(blp["rating","Pr(>|t|)"], 2)`$, so the nuisance covariate outs itself.
+]
+
+.blue-box[
+BLP is a projection, not the truth: it is the best *linear* read on a
+nonlinear $\tau(x)$. Use it to communicate direction and rough magnitude,
+not as the model.
+]
+
+---
+
+name: rate-main
+
+# Diagnostic 3: RATE and the TOC Curve
+
+"Is the heterogeneity *targetable*?" Treat the units with the highest
+$\hat\tau$ first; plot the benefit among the top fraction $q$ minus the ATE.
+That is the
+**Targeting Operator Characteristic** curve; its area is the **RATE**.
+
+```{r rate-plot, echo=FALSE, fig.height=3.6}
+toc <- data.frame(rate_good$TOC)
+ggplot(toc, aes(q, estimate)) +
+  geom_hline(yintercept = 0, color = "grey50") +
+  geom_line(linewidth = 1, color = "#1565c0") +
+  labs(x = "fraction treated (highest tau-hat first)",
+       y = "TOC: top-q effect minus ATE",
+       title = sprintf("AUTOC RATE = %.2f (se %.2f), highly targetable",
+                        rate_good$estimate, rate_good$std.err))
+```
+
+.small[
+RATE with the forest's own $\hat\tau$ priority: **`r round(rate_good$estimate, 2)`** (se `r round(rate_good$std.err, 2)`). With the useless `rating` priority it collapses to **`r round(rate_bad$estimate, 2)`** (se `r round(rate_bad$std.err, 2)`): a null.
+]
+
+<a href="#rate-detail" class="nav-btn">AUTOC vs Qini</a>
+
+---
+
+name: honesty-ablation-main
+
+# Diagnostic 4: the Honesty Ablation
+
+Refit with `honesty = FALSE` and evaluate both forests on the held-out grid:
+
+```{r ablation-out, echo=FALSE}
+ablation |>
+  transmute(forest = honesty,
+            `CATE RMSE` = round(rmse, 3),
+            `mean SE` = round(mean_se, 3),
+            `95% coverage` = round(coverage, 3)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.small[
+- Adaptive **doubles** the CATE RMSE (`r round(ablation$rmse[ablation$honesty=="adaptive"],2)` vs `r round(ablation$rmse[ablation$honesty=="honest"],2)`): the winner's curse re-enters.
+- Its pointwise SEs **balloon** (`r round(ablation$mean_se[ablation$honesty=="adaptive"],2)` vs `r round(ablation$mean_se[ablation$honesty=="honest"],2)`): unstable trees inflate the jackknife variance.
+]
+
+.highlight-box[
+Adaptive intervals are not "too narrow", they are *uninformative*: badly
+centered and four times too wide. Honesty buys a tight, well-centered
+interval, which is the entire point. The exercise shows the winner's curse in
+isolation on a constant-effect DGP.
+]
+
+---
+
+name: tuning-main
+
+# Tuning `grf`: What Moves Results
+
+.small[
+| Parameter | Default | What it controls | Moves results? |
+|---|---|---|---|
+| `num.trees` | 2000 | Monte Carlo error, variance stability | yes for the *SE*; use 2000+ |
+| `honesty.fraction` | 0.5 | share of subsample placing splits | changes *inference*, not just fit |
+| `min.node.size` | 5 | leaf-size floor, smoothing | yes, main bias-variance knob |
+| `sample.fraction` | 0.5 | subsample size $s/n$, CLT rate | yes |
+| `mtry` | $\sqrt{p}+20$ | covariates tried per split | mainly with many junk covariates |
+| `honesty.prune.leaves` | TRUE | drop leaves empty of treated or control | rarely, but keep on |
+]
+
+--
+
+`tune.parameters = "all"` cross-validates against the R-learner debiased
+error. In practice `min.node.size` and `sample.fraction` do the real work;
+`mtry` matters when noise covariates dominate; turning honesty off is not
+tuning, it is abandoning valid inference.
+
+<a href="#tuning-detail" class="nav-btn">the debiased-error objective</a>
+
+---
+
+name: checklist-main
+
+# Practitioner Checklist
+
+.small[
+| Step | Call | What you learn |
+|---|---|---|
+| 1. Set the propensity | `W.hat = 0.5` in an RCT | do not estimate a known quantity |
+| 2. Fit with enough trees | `causal_forest(num.trees = 2000)` | stable variance estimates |
+| 3. Sanity-check the average | `average_treatment_effect()` | AIPW ATE matches the experiment |
+| 4. Test for heterogeneity | `test_calibration()` | omnibus: is there any signal? |
+| 5. Summarize it | `best_linear_projection()` | direction + rough magnitude |
+| 6. Quantify targetability | `rank_average_treatment_effect()` | RATE: worth personalizing? |
+| 7. Report uncertainty | `estimate.variance` CIs | pointwise only, never a band |
+]
+
+--
+
+.blue-box[
+**The interview arc:** ATE from AIPW, heterogeneity confirmed by the
+calibration test, summarized by BLP, its business value quantified by RATE.
+Then Module 7 turns $\hat\tau(x)$ into a deployment rule.
+]
+
+---
+
+name: m6-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "Why do we need *honest* trees, and what does it cost?" | Adaptive trees reuse the noise that placed a split to estimate the leaf: a winner's curse that invents heterogeneity. Honesty sample-splits (structure on one half, leaf effects on the other), removing the bias so the CLT holds. Cost is efficiency: half the subsample estimates, so wider CIs. |
+| "The forest gives a CI at each x. Can I say the effect is positive everywhere?" | No. Wager-Athey give *pointwise* normality, not uniform. A union of pointwise CIs is not a confidence band. For whole-function claims use the calibration test, BLP, or RATE. |
+| "It's a randomized experiment. Why bother orthogonalizing on m(x) and e(x)?" | Local centering (the R-learner) makes the estimate Neyman-orthogonal. It strips the prognostic-covariate variance out of Y, sharpening tau-hat, and protects against chance covariate imbalance even when e(x) is known. Set W.hat to the design propensity. |
+| "How do you know the heterogeneity is real and not overfitting?" | `test_calibration`: a significant differential-forest coefficient near 1. Then `rank_average_treatment_effect`: a positive RATE means the ranking is targetable; feed it a nuisance covariate and it returns a null, a built-in placebo. |
+| "Forest vs a two-model T-learner for CATE?" | The T-learner differences two noisy regressions and has no honest inference. The causal forest targets tau directly via a residual-on-residual moment, honest splitting gives valid pointwise CIs, and orthogonalization guards against confounding. Use the T-learner only as a quick baseline. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Wager and Athey (2018), *JASA* | Honest forests: the pointwise CLT, subsampling as a U-statistic, the infinitesimal-jackknife variance. |
+| Athey, Tibshirani and Wager (2019), *Annals* | GRF: forests as adaptive kernels, the local moment condition, gradient-based splitting. Unifies causal, quantile, IV, survival. |
+| Nie and Wager (2021), *Biometrika* | The R-learner objective and quasi-oracle error bounds behind `grf`'s local centering. |
+| Yadlowsky et al. (2021) | RATE / TOC: rank-weighted ATE for evaluating (and comparing) targeting rules with a valid SE. |
+| Kunzel et al. (2019), *PNAS* | Meta-learners (S/T/X-learner): the baselines a causal forest improves on. |
+]
+
+**Next module:** turn $\hat\tau(x)$ into an interpretable, cost-aware
+deployment rule with `policy_tree`, and evaluate it off-policy.
+
+**Drill:** `exercise.R` hand-codes honest vs adaptive partition estimation to
+expose the winner's curse, then verifies `grf`'s pointwise CI coverage over
+many refits.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: honesty-proof
+
+# Backup: Why Honesty Gives a CLT
+
+.small[
+Write the forest estimate as an average of a tree kernel $T$ over subsamples
+$s$ of the $n$ points:
+
+$$\hat\tau(x) = \binom{n}{s}^{-1} \sum_{|S| = s} T(x;\, S),$$
+
+a **U-statistic** of order $s$. Its Hajek projection is the sum of leave-one-in
+first-order terms, and Hoeffding's decomposition gives asymptotic normality
+provided the higher-order terms vanish, which holds when $s/n \to 0$ at the
+admissible rate.
+
+**Where each condition earns its keep:**
+
+| Condition | What it prevents |
+|---|---|
+| Honesty | leaf estimate correlated with split placement, i.e. first-order bias |
+| $\alpha$-regularity | leaves collapsing onto a vanishing neighborhood (inconsistency) |
+| $s = n^\beta$, $\beta$ in range | U-statistic remainder dominating the linear term |
+| Overlap $\eta \le e(x) \le 1-\eta$ | leaves with no treated or no control units |
+| Lipschitz $\tau,\, m,\, e$ | leaf-averaging bias shrinking faster than the SE |
+
+The bias is $o(\text{se})$, so the standardized statistic centers at zero. The
+variance is estimated by the infinitesimal jackknife (`variance.estimates`).
+Consistency of *that* estimator is the second theorem, and needs $B$ large,
+hence "use enough trees".
+]
+
+<a href="#honest-tree-main" class="nav-btn-br">← back</a>
+
+---
+
+name: adaptive-nn-detail
+
+# Backup: Who Gets Weight, Visualized
+
+.small[
+Pick one dense high-peak target driver. `get_forest_weights` returns
+$\alpha_i(x)$ for every training point; the forest's "neighbors" of $x$ are
+the points with large weight, clustered near $x$ in the directions the splits
+found relevant (density, peak share), and indifferent to `rating`.
+]
+
+```{r nn-plot, echo=FALSE, fig.height=3.9}
+x_target <- matrix(c(density = 0.9, tenure = 12, peak_shr = 0.6, rating = 4.7), nrow = 1)
+w_alpha <- as.numeric(get_forest_weights(cf, x_target))
+tibble(density = d$density, peak_shr = d$peak_shr, alpha = w_alpha) |>
+  ggplot(aes(density, peak_shr, color = alpha, size = alpha)) +
+  geom_point(alpha = 0.6) +
+  annotate("point", x = 0.9, y = 0.6, shape = 4, size = 5, stroke = 2, color = "#e65100") +
+  scale_color_viridis_c(name = expression(alpha[i](x))) +
+  scale_size_continuous(range = c(0.1, 3), guide = "none") +
+  labs(x = "density", y = "peak share",
+       title = "X marks the target x; brighter/larger = larger forest weight")
+```
+
+<a href="#grf-weights-main" class="nav-btn-br">← back</a>
+
+---
+
+name: grf-derivation
+
+# Backup: Gradient-Based Splitting
+
+.small[
+Solving the local moment $\sum_i \alpha_i(x)\psi_\theta(O_i) = 0$ exactly at
+*every* candidate split would be too slow. GRF uses a **one-step (Newton)
+approximation**.
+
+At a parent node with estimate $\hat\theta_P$, compute the score gradient
+$A_P = \frac{1}{n_P}\sum_{i\in P}\nabla_\theta \psi_{\hat\theta_P}(O_i)$ and
+form a **pseudo-outcome** (influence function) for each observation:
+
+$$\rho_i = -A_P^{-1}\,\psi_{\hat\theta_P}(O_i).$$
+
+For the causal forest this is the familiar
+$\rho_i \propto (W_i - \bar W_P)\big[(Y_i - \bar Y_P) - (W_i - \bar W_P)\hat\tau_P\big]$.
+Then split to **maximize the between-child variance of $\rho_i$**, exactly a
+CART regression split on the pseudo-outcomes:
+
+$$\Delta(j, c) \;\approx\; \frac{n_L n_R}{n_P^2}\,(\bar\rho_L - \bar\rho_R)^2.$$
+
+This is the fast label-based approximation to "split where $\theta(x)$ changes
+most". Leaf estimates are then re-solved exactly (and honestly) on the
+estimation half. Same $\rho$ machinery with a different $\psi$ gives the
+splitting rule for quantile, IV, and survival forests.
+]
+
+<a href="#grf-moment-main" class="nav-btn-br">← back</a>
+
+---
+
+name: rlearner-detail
+
+# Backup: Why Orthogonality Protects
+
+.small[
+Partition the outcome as $Y = m(X) + (W - e(X))\tau(X) + \varepsilon$, where
+$m(x) = \mathbb{E}[Y\mid X=x]$ is the **prognostic** part. Residualizing both
+sides on $\hat m$ and $\hat e$ leaves the Robinson moment
+
+$$\tilde Y_i = \tilde W_i\,\tau(X_i) + \varepsilon_i,
+\qquad \tilde Y_i = Y_i - \hat m(X_i),\;\; \tilde W_i = W_i - \hat e(X_i).$$
+
+The R-learner loss $\sum_i(\tilde Y_i - \tau(X_i)\tilde W_i)^2$ has a score
+whose derivative with respect to the nuisances $(m, e)$ is **zero in
+expectation at the truth**. So an $O(h)$ error in $\hat m$ or $\hat e$
+contributes only $O(h^2)$ to the $\tau$ estimate: **Neyman orthogonality**.
+
+Two consequences:
+
+1. **Confounding by a smooth signal** (a covariate that shifts $Y$ and
+   correlates with $W$) enters through $m$ and is differenced out, so the
+   forest does not mistake a large main effect for heterogeneity.
+2. **In an RCT**, $e(x) = 0.5$ exactly, but a finite sample has chance
+   imbalance, so $\widehat{\text{Cov}}(W, X) \ne 0$. Centering on $\hat m(x)$
+   removes the prognostic-covariate variance from $\tilde Y$, so $\hat\tau(x)$
+   is lower-variance and robust to that imbalance. Set `W.hat = 0.5` so the
+   forest uses the true propensity and adds no estimation noise from $\hat e$.
+]
+
+<a href="#rlearner-main" class="nav-btn-br">← back</a>
+
+---
+
+name: cf-dgp
+
+# Backup: The HTE DGP
+
+.small[
+```{r cf-dgp-show, eval=FALSE}
+make_hte_data <- function(n = 6000, seed = 42) {
+  set.seed(seed)
+  tibble(
+    density  = runif(n),                        # city density percentile
+    tenure   = pmin(rexp(n, 1 / 18), 90),       # months on platform
+    peak_shr = rbeta(n, 2, 3),                  # share of hours in peak
+    rating   = pmin(pmax(rnorm(n, 4.7, 0.2), 3.5), 5),   # NUISANCE
+    w        = rbinom(n, 1, 0.5),               # randomized push (e = 0.5)
+    tau      = 1.5 * density - 0.02 * tenure + 2.0 * density * peak_shr,
+    y        = 10 + 5 * density + 0.05 * tenure + 3 * peak_shr +
+               tau * w + rnorm(n, 0, 2)
+  )
+}
+```
+]
+
+.small[
+- `tau` is the **true CATE**: rises with density, falls slowly with tenure,
+  and the `density * peak_shr` term makes peak-hour drivers in dense cities
+  respond most. Mean effect $\approx 0.79$ trips/wk.
+- `rating` enters neither `tau` nor `y`: a pure nuisance, there to be caught
+  by BLP and RATE.
+- The big prognostic term `5 * density` in `y` (with none in the effect
+  slope for its own sake) is exactly what local centering removes.
+]
+
+<a href="#cf-fit-main" class="nav-btn-br">← back</a>
+
+---
+
+name: rate-detail
+
+# Backup: AUTOC vs Qini, and Reading the TOC
+
+.small[
+The TOC at fraction $q$ is
+$\text{TOC}(q) = \mathbb{E}[\tau(X)\mid \hat\pi(X) \ge \hat\pi_{(q)}] - \mathbb{E}[\tau(X)]$,
+the average effect among the top fraction $q$ of prioritized units minus the
+ATE. A curve that starts high and decays to zero at $q = 1$ means the priority
+successfully ranks responders.
+
+**Two weightings**, both from `rank_average_treatment_effect`:
+
+| Target | Weight on $\text{TOC}(q)$ | Emphasis |
+|---|---|---|
+| `AUTOC` | $1/q$ (log) | rewards concentrating effect in a *small* top slice |
+| `QINI` | $q$ (linear) | rewards total gain across the whole ranking |
+
+AUTOC is the sharper test when only a minority carry large effects; Qini
+tracks aggregate value. Both are estimated on held-out data (honest split
+under the hood) with a standard error, so "is the ranking better than random?"
+is a $t$-test: `estimate / std.err`.
+
+**The built-in placebo:** feed a covariate you believe is irrelevant (here
+`rating`) as the priority. A near-zero, insignificant RATE confirms the
+diagnostic is not manufacturing targetability out of noise, and that the
+*real* priority's positive RATE is signal.
+]
+
+<a href="#rate-main" class="nav-btn-br">← back</a>
+
+---
+
+name: tuning-detail
+
+# Backup: The Debiased-Error Objective
+
+.small[
+`tune.parameters` cannot cross-validate on CATE error (the truth is
+unobserved). Instead it minimizes an estimate of the **R-learner objective**
+on held-out folds, the same loss the forest is built to minimize:
+
+$$\widehat{\text{err}}(\text{params}) =
+\frac{1}{n}\sum_i \Big[(Y_i - \hat m(X_i)) -
+\hat\tau_{-i}(X_i)\,(W_i - \hat e(X_i))\Big]^2,$$
+
+using out-of-bag $\hat\tau_{-i}$. Because $\tilde Y = \tilde W\tau + \varepsilon$,
+a $\hat\tau$ closer to the truth lowers this residual in expectation, so it is
+a valid proxy for CATE accuracy without ever seeing $\tau$.
+
+**What tuning actually changes here:** `min.node.size` and `sample.fraction`
+trade the leaf-averaging bias against variance; over-large leaves flatten real
+heterogeneity (the calibration differential coefficient drops below 1),
+over-small leaves inflate the SE. `mtry` matters once junk covariates (like
+`rating`) compete for splits. `num.trees` barely moves the point estimate but
+is essential for a stable `variance.estimates`, so never economize on trees
+when you need the CIs.
+
+**Rule of thumb:** tune, but if `test_calibration` already shows a
+mean coefficient near 1 and a strong differential coefficient, the defaults
+are usually fine and tuning buys little.
+]
+
+<a href="#tuning-main" class="nav-btn-br">← back</a>
