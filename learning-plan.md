@@ -1,7 +1,8 @@
 # Causal Inference Beyond A/B Tests — Learning Plan
 
 A deep-dive companion to `experimentation-refresher/module-08`. Status:
-**planned, not built.** This document is the spec; modules will follow.
+**built, modules 1-8 complete.** This document was the spec; see the
+[README](README.md) for the finished course.
 
 ## Audience
 
@@ -79,7 +80,7 @@ just recognize names.
 ## Module 8 — Matrix Completion and the Modern Panel
 - Athey et al. (2021) — matrix completion estimator for panel causal effects.
 - The connection to SC, SDID, and interactive FE.
-- `gsynth`, `MCPanel`, and the convergence of the panel literature.
+- `gsynth`, hand-coded soft-impute, and the convergence of the panel literature.
 - When to reach for matrix completion vs DiD vs SC.
 - **Application:** sparse panel — many cities, some treated at irregular times.
 - **Exercise:** simulate a low-rank panel; compare MC, SDID, and CS RMSEs.
@@ -97,7 +98,7 @@ just recognize names.
 - **synthdid** — Synthetic DiD.
 - **augsynth** — augmented SC.
 - **grf** — generalized random forests, causal forest, policy tree.
-- **MCPanel** — matrix completion.
+- **gsynth** (estimator = "mc") plus a hand-coded soft-impute — matrix completion. (MCPanel is GitHub-only and compile-fussy; the course does not use it.)
 
 ## Key References
 

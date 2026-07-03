@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Learning Plan — Causal Inference Beyond A/B Tests</title>
+<title>Learning Plan: Causal Inference Beyond A/B Tests</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   body {
@@ -25,6 +25,7 @@
   pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
   pre code { background: none; padding: 0; }
   blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+  .site-nav { font-size: 0.85em; margin-bottom: 1.5em; color: #888; }
 </style>
 <script>
 MathJax = {
@@ -34,9 +35,11 @@ MathJax = {
 <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 </head>
 <body>
+<nav class="site-nav"><a href="index.html">Course home</a></nav>
 <h1 id="causal-inference-beyond-ab-tests-learning-plan">Causal Inference Beyond A/B Tests — Learning Plan</h1>
 <p>A deep-dive companion to <code>experimentation-refresher/module-08</code>. Status:
-<strong>planned, not built.</strong> This document is the spec; modules will follow.</p>
+<strong>built, modules 1-8 complete.</strong> This document was the spec; see the
+<a href="README.md">README</a> for the finished course.</p>
 <h2 id="audience">Audience</h2>
 <p>You've completed the experimentation-refresher Module 8 tour and want the
 formal treatment of each method — the kind of detail an applied
@@ -119,7 +122,7 @@ just recognize names.</p>
 <ul>
 <li>Athey et al. (2021) — matrix completion estimator for panel causal effects.</li>
 <li>The connection to SC, SDID, and interactive FE.</li>
-<li><code>gsynth</code>, <code>MCPanel</code>, and the convergence of the panel literature.</li>
+<li><code>gsynth</code>, hand-coded soft-impute, and the convergence of the panel literature.</li>
 <li>When to reach for matrix completion vs DiD vs SC.</li>
 <li><strong>Application:</strong> sparse panel — many cities, some treated at irregular times.</li>
 <li><strong>Exercise:</strong> simulate a low-rank panel; compare MC, SDID, and CS RMSEs.</li>
@@ -137,7 +140,7 @@ just recognize names.</p>
 <li><strong>synthdid</strong> — Synthetic DiD.</li>
 <li><strong>augsynth</strong> — augmented SC.</li>
 <li><strong>grf</strong> — generalized random forests, causal forest, policy tree.</li>
-<li><strong>MCPanel</strong> — matrix completion.</li>
+<li><strong>gsynth</strong> (estimator = "mc") plus a hand-coded soft-impute — matrix completion. (MCPanel is GitHub-only and compile-fussy; the course does not use it.)</li>
 </ul>
 <h2 id="key-references">Key References</h2>
 <ul>
