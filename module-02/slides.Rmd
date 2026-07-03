@@ -1,0 +1,1047 @@
+---
+title: "Module 2: Heterogeneity-Robust DiD"
+subtitle: "Callaway-Sant'Anna, Sun-Abraham, Imputation, and Switchers"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(fixest)
+library(did)
+library(didimputation)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r make-panel, include=FALSE}
+make_panel <- function(scenario = c("constant", "dynamic", "heterogeneous"),
+                       n_cities = 30, n_t = 60, seed = 42) {
+  scenario <- match.arg(scenario)
+  set.seed(seed)
+  cohorts <- tibble(
+    city = 1:n_cities,
+    g = c(rep(15, 8), rep(25, 8), rep(35, 8), rep(Inf, 6))
+  )
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    left_join(cohorts, by = "city") |>
+    mutate(
+      treated = t >= g,
+      cohort = case_when(g == 15 ~ "Early (g=15)", g == 25 ~ "Mid (g=25)",
+                         g == 35 ~ "Late (g=35)", TRUE ~ "Never"),
+      eff = case_when(
+        !treated ~ 0,
+        scenario == "constant"      ~ 1.0,
+        scenario == "dynamic"       ~ 0.4 * (1 + 0.10 * (t - g)),
+        scenario == "heterogeneous" ~ 0.4 * (1 + 0.10 * (t - g)) *
+                                      (1 + 0.8 * (g == 15) - 0.8 * (g == 35))
+      ),
+      y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3)
+    )
+}
+panel <- make_panel("heterogeneous")
+```
+
+```{r compute, include=FALSE}
+# ---- true targets from the effect column ----
+true_simple  <- mean(panel$eff[panel$treated])
+true_group   <- panel |> filter(treated, is.finite(g)) |>
+  group_by(g) |> summarise(a = mean(eff), .groups = "drop") |> pull(a) |> mean()
+true_dynamic <- panel |> filter(treated, is.finite(g)) |> mutate(e = t - g) |>
+  group_by(e) |> summarise(a = mean(eff), .groups = "drop") |> pull(a) |> mean()
+
+# ---- Callaway-Sant'Anna ----
+dat <- panel |> mutate(g0 = ifelse(is.finite(g), g, 0)) |>
+  select(city, t, y, g0) |> as.data.frame()
+cs_nev <- att_gt("y", tname = "t", idname = "city", gname = "g0", data = dat,
+                 control_group = "nevertreated", base_period = "universal",
+                 est_method = "dr")
+cs_nyt <- att_gt("y", tname = "t", idname = "city", gname = "g0", data = dat,
+                 control_group = "notyettreated", base_period = "universal",
+                 est_method = "dr")
+cs_simple  <- aggte(cs_nev, "simple")
+cs_group   <- aggte(cs_nev, "group")
+cs_dynamic <- aggte(cs_nev, "dynamic", cband = TRUE)
+
+# ---- Sun-Abraham ----
+panel_sa <- panel |> mutate(g_sa = ifelse(is.finite(g), g, 10000))
+fit_sa <- feols(y ~ sunab(g_sa, t) | city + t, data = panel_sa)
+sa_att <- summary(fit_sa, agg = "att")$coeftable["ATT", ]
+
+# ---- BJS imputation ----
+bjs <- did_imputation(dat, yname = "y", gname = "g0", tname = "t", idname = "city")
+
+# ---- TWFE ----
+twfe <- coef(feols(y ~ treated | city + t, data = panel))[["treatedTRUE"]]
+
+# ---- ATT(g,t) paths for plotting ----
+attgt_df <- tibble(g = cs_nev$group, t = cs_nev$t, att = cs_nev$att) |>
+  mutate(e = t - g, cohort = paste0("g=", g))
+
+# ---- noiseless panel: isolates contamination from sampling noise ----
+panel_det <- panel |> mutate(y = 5 + 0.05 * t + city * 0.1 + eff)
+
+es_paths <- function(pnl, W = 8) {
+  es <- pnl |> mutate(rel = ifelse(is.finite(g), t - g, -1L))
+  naive <- feols(y ~ i(rel, ref = -1) | city + t, data = es)
+  nv <- as.data.frame(naive$coeftable) |> rownames_to_column("term") |>
+    transmute(e = as.integer(str_extract(term, "-?[0-9]+")), naive = Estimate)
+  psa <- pnl |> mutate(g_sa = ifelse(is.finite(g), g, 10000))
+  fsa <- feols(y ~ sunab(g_sa, t) | city + t, data = psa)
+  sa <- as.data.frame(fsa$coeftable) |> rownames_to_column("term") |>
+    transmute(e = as.integer(str_extract(term, "-?[0-9]+")), SA = Estimate) |>
+    filter(!is.na(e))
+  d <- pnl |> mutate(g0 = ifelse(is.finite(g), g, 0)) |>
+    select(city, t, y, g0) |> as.data.frame()
+  cs <- att_gt("y", tname = "t", idname = "city", gname = "g0", data = d,
+               control_group = "nevertreated", base_period = "universal",
+               est_method = "dr")
+  csd <- aggte(cs, "dynamic")
+  csdf <- tibble(e = csd$egt, CS = csd$att.egt)
+  tr <- pnl |> filter(is.finite(g)) |> mutate(e = t - g) |> group_by(e) |>
+    summarise(Truth = mean(eff), .groups = "drop")
+  reduce(list(tr, nv, sa, csdf), full_join, by = "e") |>
+    arrange(e) |> filter(e >= -W, e <= W)
+}
+es_det   <- es_paths(panel_det)
+es_noisy <- es_paths(panel)
+
+# ---- dCDH instantaneous switcher estimator on the dynamic scenario ----
+did_m_instant <- function(df) {
+  df <- df |> arrange(city, t) |> group_by(city) |>
+    mutate(D = as.integer(treated), D_lag = lag(D), dy = y - lag(y)) |> ungroup()
+  sw <- df |> filter(!is.na(D_lag), D == 1, D_lag == 0)
+  st <- df |> filter(!is.na(D_lag), D == 0, D_lag == 0)
+  map_dfr(sort(unique(sw$t)), function(tt) {
+    tibble(t = tt, n_sw = sum(sw$t == tt),
+           didm = mean(sw$dy[sw$t == tt]) - mean(st$dy[st$t == tt]))
+  })
+}
+dm <- did_m_instant(make_panel("dynamic"))
+dm_overall <- weighted.mean(dm$didm, dm$n_sw)
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td><b>2</b></td><td><b>Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+Module 1 showed *why* TWFE breaks under staggered adoption: it averages in
+forbidden 2x2s that use already-treated units as controls. This module is the
+repair kit, at the level of detail an interview will probe.
+
+--
+
+**You will be able to:**
+
+1. Define the group-time ATT and identify it with never-treated vs
+   not-yet-treated controls, universal vs varying base period.
+2. Explain the doubly-robust estimator and CS's influence-function SEs and
+   uniform bands.
+3. Diagnose why a naive TWFE event study shows pre-trends even when parallel
+   trends holds, and fix it with Sun-Abraham.
+4. Say what BJS imputation and dCDH switchers add, and choose among all four.
+5. Pick the right aggregation (simple / group / dynamic) for the question.
+
+--
+
+**Same application as Module 1:** staggered zone-notification rollout, 30
+cities, 60 weeks, cohorts at 15/25/35, 6 never-treated, parallel trends true
+by construction. All numbers are the `heterogeneous` scenario.
+
+---
+
+# What a Fix Must Do
+
+Every heterogeneity-robust estimator obeys one rule: **only clean
+comparisons**. Never use an already-treated unit as a control.
+
+.small[
+| Estimator | Core idea | Package | This module adds |
+|---|---|---|---|
+| **Callaway-Sant'Anna** | group-time $\text{ATT}(g,t)$, then aggregate | `did` | DR estimator, IF-based SEs, uniform bands |
+| **Sun-Abraham** | saturated cohort $\times$ event-time regression | `fixest` | the contamination algebra, when it equals CS |
+| **Borusyak-Jaravel-Spiess** | impute $Y(0)$ from untreated cells, average | `didimputation` | efficiency under parallel trends |
+| **de Chaisemartin-D'Haultfoeuille** | switchers vs stayers, negative-weights audit | `DIDmultiplegt` | the switcher estimand, hand-coded |
+]
+
+--
+
+.blue-box[
+They agree in simple cases and diverge under heterogeneity. The interview
+question is never "which package" but "which estimand, which controls, which
+aggregation, and how would you check the answer moved for the right reason".
+]
+
+---
+
+name: cs-estimand-main
+
+# Callaway-Sant'Anna: The Estimand
+
+TWFE forced a two-dimensional object into one number. CS keeps both
+dimensions. The building block is the **group-time ATT**:
+
+$$\text{ATT}(g, t) = \mathbb{E}\!\left[Y_t(g) - Y_t(0) \mid G = g\right]$$
+
+the effect at calendar time $t$ on the cohort first treated at $g$.
+
+--
+
+.pull-left[
+**Cohort index $g$**: when you were first treated (15, 25, or 35).
+
+**Time index $t$**: when we evaluate the effect.
+
+**Event time** $e = t - g$: exposure length, aligns cohorts at $e = 0$.
+]
+
+.pull-right[
+.highlight-box[
+Two indices, never collapsed prematurely. A headline number is a *choice* of
+how to average this surface, made explicit and last, not baked into the
+estimator like TWFE's variance weights.
+]
+]
+
+--
+
+For $t \geq g$, under parallel trends and no anticipation, each
+$\text{ATT}(g,t)$ is a clean 2x2 DiD anchored at a pre-period base.
+
+---
+
+name: cs-controls-main
+
+# Two Identification Levers
+
+$$\text{ATT}(g, t) = \big[\bar Y_{g,t} - \bar Y_{g,g-1}\big] - \big[\bar Y_{C,t} - \bar Y_{C,g-1}\big]$$
+
+--
+
+**Comparison group $C$:**
+
+- **Never-treated**: only the 6 cities that never adopt. Cleanest assumption,
+  but high variance when that group is small.
+- **Not-yet-treated**: for each $(g,t)$, add every cohort with $G > t$ (plus
+  never-treated). More controls, lower variance, same parallel-trends logic
+  extended to the not-yet-treated.
+
+--
+
+**Base period:**
+
+- **Universal**: anchor at $g-1$ for all $t$. Each $\text{ATT}(g,t)$ is a
+  direct "did the gap move from $g-1$ to $t$?" test. Makes CS coincide with
+  Sun-Abraham.
+- **Varying**: anchor at $t-1$, re-anchoring as $t$ moves. Natural for long
+  differences, but the reference drifts.
+
+--
+
+.blue-box[
+Here: never-treated + universal base gives $\text{ATT}(15,\cdot)$ high,
+$\text{ATT}(35,\cdot)$ near zero, the cohort heterogeneity TWFE smeared into
+0.42. <a href="#cs-dr-derivation" class="inline-btn">doubly-robust form</a>
+]
+
+---
+
+name: cs-code-main
+
+# CS in Practice and the ATT(g,t) Surface
+
+.pull-left[
+.small[
+```{r cs-run, eval=FALSE}
+dat <- panel |>            # did wants 0 = never
+  mutate(g0 = ifelse(is.finite(g), g, 0)) |>
+  select(city, t, y, g0) |>
+  as.data.frame()
+
+cs <- att_gt(
+  yname = "y", tname = "t",
+  idname = "city", gname = "g0",
+  data = dat,
+  control_group = "nevertreated",
+  base_period = "universal",
+  est_method = "dr")          # doubly robust
+```
+
+Each cohort's effect grows with exposure and the early cohort dwarfs the late
+one. This 2D structure is exactly what one TWFE number destroys.
+]
+]
+
+.pull-right[
+```{r cs-plot, echo=FALSE, fig.height=4.2, fig.width=5.2}
+attgt_df |> filter(e >= 0) |>
+  ggplot(aes(e, att, color = cohort)) +
+  geom_hline(yintercept = 0, color = "grey60") +
+  geom_line(linewidth = 1) + geom_point(size = 1.6) +
+  scale_color_manual(values = c("g=15" = "#e65100", "g=25" = "#2e7d32",
+                                "g=35" = "#1565c0")) +
+  labs(x = "Event time e = t - g", y = "ATT(g,t)", color = NULL,
+       title = "Group-time effects, never-treated control") +
+  theme(legend.position = "bottom")
+```
+]
+
+---
+
+name: cs-inference-main
+
+# Inference: Influence Functions, Uniform Bands
+
+CS derives the **influence function** of every $\widehat{\text{ATT}}(g,t)$:
+the per-observation score whose sample variance is the estimator's variance,
+accounting for the estimated nuisance models.
+
+--
+
+Because the influence functions for *all* $(g,t)$ are available jointly, a
+**multiplier bootstrap** gives simultaneous (uniform) confidence bands over
+the whole ATT path, not one point at a time.
+
+```{r uniform-band}
+c(pointwise_crit = 1.96,
+  uniform_crit   = round(cs_dynamic$crit.val.egt, 2))  # dynamic aggregation
+```
+
+--
+
+.highlight-box[
+The uniform critical value (`r round(cs_dynamic$crit.val.egt, 2)` here) exceeds
+1.96, so honest event-study plots use the wider band. `did` clusters by unit
+and turns on `bstrap` + `cband` by default. Reporting pointwise intervals on a
+12-point event study invites a multiple-comparisons objection you will not
+survive in a review.
+]
+
+---
+
+name: agg-main
+
+# Aggregation: Three Questions, Three Answers
+
+$\text{ATT}(g,t)$ is a surface. The headline is a weighted average, and the
+weights are a modeling choice.
+
+.small[
+| Aggregation | Averages over | Answers |
+|---|---|---|
+| **simple** | every treated $(g,t)$ cell, equal weight | average lift across all treated place-weeks |
+| **group** | cohorts (by size), each cohort's mean post-effect | which cohorts drove it |
+| **dynamic** | event time $e$, equal weight per $e$ | is the effect still growing with exposure |
+]
+
+```{r agg-code, eval=FALSE}
+aggte(cs, type = "simple")    # one number, cell-weighted
+aggte(cs, type = "group")     # per-cohort, then average
+aggte(cs, type = "dynamic")   # event-study path + overall
+```
+
+--
+
+.blue-box[
+Match the aggregation to the decision. "Did the rollout help on average?" is
+*simple*. "Should we prioritize early markets next time?" is *group*. "Has the
+effect plateaued?" is *dynamic*.
+]
+
+---
+
+name: agg-numbers-main
+
+# They Differ Numerically, By Construction
+
+```{r agg-table, echo=FALSE}
+tibble(
+  Aggregation = c("simple", "group", "dynamic"),
+  `True target` = c(true_simple, true_group, true_dynamic),
+  `CS estimate` = c(cs_simple$overall.att, cs_group$overall.att,
+                    cs_dynamic$overall.att),
+  `Std. error`  = c(cs_simple$overall.se, cs_group$overall.se,
+                    cs_dynamic$overall.se)
+) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+Three different estimands: true targets 1.41, 1.21, 1.79. Dynamic is largest
+because it equal-weights event times, and at long exposure only the early
+high-effect cohort survives. Group is smallest because the low-effect late
+cohort gets equal cohort weight.
+
+--
+
+.highlight-box[
+The CS estimates sit above their targets by a fixed amount here. That offset
+is *identical across all three effect scenarios*: the signature of the small
+6-city never-treated draw, not bias.
+<a href="#agg-offset-detail" class="nav-btn">why it is a draw, not bias</a>
+]
+
+---
+
+name: sa-contam-main
+
+# Sun-Abraham: The Contamination Problem
+
+The reflex diagnostic is the TWFE event study:
+
+$$y_{it} = \alpha_i + \lambda_t + \sum_{e \neq -1} \mu_e\,
+\mathbb{1}\{t - g_i = e\} + \varepsilon_{it}$$
+
+and you read $\mu_e$ as "the effect $e$ periods after adoption".
+
+--
+
+Sun-Abraham: $\mu_e$ is **not** the average effect at event time $e$. It is a
+weighted sum of cohort effects at $e$ *and at other event times*, with weights
+that can be negative and need not sum to one within $e$.
+
+--
+
+.highlight-box[
+Consequence: a **pre-period** coefficient $\mu_{-3}$ can pick up another
+cohort's **post**-treatment effect. You get a nonzero pre-trend even when
+parallel trends holds exactly. The pretrend test fails for a reason that has
+nothing to do with pretrends.
+<a href="#sa-contam-derivation" class="nav-btn">the weighting</a>
+]
+
+---
+
+name: es-compare-main
+
+# Contamination, With the Noise Switched Off
+
+Same panel, deterministic (drop the noise term). Parallel trends is now exact,
+so any nonzero pre-coefficient is *pure contamination*.
+
+```{r es-det-plot, echo=FALSE, fig.height=4.1}
+es_det |>
+  pivot_longer(-e, names_to = "estimator", values_to = "att") |>
+  filter(!is.na(att)) |>
+  mutate(estimator = factor(estimator, c("Truth", "naive", "SA", "CS"))) |>
+  ggplot(aes(e, att, color = estimator, linetype = estimator)) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_vline(xintercept = -0.5, linetype = "dotted", color = "grey50") +
+  geom_line(linewidth = 1) + geom_point(size = 1.5) +
+  scale_color_manual(values = c(Truth = "black", naive = "#c62828",
+                                SA = "#1565c0", CS = "#2e7d32")) +
+  scale_linetype_manual(values = c(Truth = "solid", naive = "dashed",
+                                   SA = "solid", CS = "solid")) +
+  labs(x = "Event time e = t - g", y = "Estimated effect", color = NULL,
+       linetype = NULL, title = "Naive TWFE bends in the pre-period; SA and CS lie on Truth") +
+  theme(legend.position = "bottom")
+```
+
+Naive TWFE (red) has nonzero leads and attenuated lags. SA and CS sit exactly
+on Truth. <a href="#es-noisy-detail" class="inline-btn">with noise</a>
+
+---
+
+name: sa-iw-main
+
+# Sun-Abraham: The Interaction-Weighted Fix
+
+Saturate the regression: interact **every cohort** with **every event time**,
+
+$$y_{it} = \alpha_i + \lambda_t + \sum_{g}\sum_{e \neq -1}
+\delta_{g,e}\,\mathbb{1}\{G_i = g\}\,\mathbb{1}\{t - g = e\} + \varepsilon_{it}$$
+
+so $\delta_{g,e}$ is a clean cohort-specific effect, then average across
+cohorts at each $e$ using **cohort shares** as weights (non-negative, sum to
+one).
+
+```{r sa-code, eval=FALSE}
+panel_sa <- panel |> mutate(g_sa = ifelse(is.finite(g), g, 10000))  # never -> big
+fit_sa <- feols(y ~ sunab(g_sa, t) | city + t, data = panel_sa)
+summary(fit_sa, agg = "att")   # cohort-share-weighted overall ATT
+```
+
+--
+
+.blue-box[
+`sunab()` builds the saturated design and the aggregation in one call. The
+never-treated cohort is coded to a large finite value so it is the excluded,
+uncontaminated control. No leakage across event times: that is the whole
+repair.
+]
+
+---
+
+name: sa-equals-cs-main
+
+# When Sun-Abraham Equals Callaway-Sant'Anna
+
+With **never-treated controls** and the **same base period** $g-1$, the IW
+estimator and CS are the same clean comparison.
+
+```{r sa-eq-cs}
+c(sun_abraham   = round(sa_att[["Estimate"]], 5),
+  cs_nev_simple = round(cs_simple$overall.att, 5),
+  difference    = signif(abs(sa_att[["Estimate"]] - cs_simple$overall.att), 3))
+```
+
+--
+
+Identical to 1e-11, and the two event-study paths match at every $e$.
+
+--
+
+.highlight-box[
+So Sun-Abraham is not an *alternative* to CS: it is CS in regression clothing.
+The standard errors differ (SA `r round(sa_att[["Std. Error"]], 3)`, CS
+`r round(cs_simple$overall.se, 3)`) because each estimates the control-group
+sampling variance its own way, but the point estimate is the same object. Use
+whichever fits your workflow; do not report both as a robustness check.
+]
+
+---
+
+name: bjs-main
+
+# Borusyak-Jaravel-Spiess: Imputation
+
+The most efficient of the four, and the most transparent. Three steps:
+
+1. Fit $Y_{it} = \alpha_i + \lambda_t + \varepsilon_{it}$ on **untreated cells
+   only** (all not-yet-treated and never-treated observations, including
+   treated units' pre-periods).
+2. Impute $\hat Y_{it}(0) = \hat\alpha_i + \hat\lambda_t$ for every treated
+   cell.
+3. Effect $= Y_{it} - \hat Y_{it}(0)$; average with your target's weights.
+
+```{r bjs-code, eval=FALSE}
+did_imputation(dat, yname = "y", gname = "g0", tname = "t", idname = "city")
+```
+
+--
+
+.blue-box[
+The mirror image of Module 1's forbidden comparison: **never extrapolate a
+treated cell's counterfactual from other treated cells**, only from untreated
+ones. Step 1 is exactly that discipline.
+<a href="#bjs-algorithm-detail" class="nav-btn">efficiency argument</a>
+]
+
+---
+
+name: bjs-eff-main
+
+# Why Imputation Is More Efficient
+
+Step 1 uses *every* untreated cell to pin the fixed effects, not just a 6-city
+never-treated group. Lower-variance counterfactual, lower-variance estimate.
+
+```{r bjs-eff, echo=FALSE}
+tibble(
+  Estimator = c("BJS imputation", "CS (simple)"),
+  Estimate  = c(bjs$estimate, cs_simple$overall.att),
+  `Std. error` = c(bjs$std.error, cs_simple$overall.se),
+  `True target` = c(true_simple, true_simple)
+) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+BJS lands on the true simple ATT (`r round(true_simple,3)`) with a standard
+error of `r round(bjs$std.error,3)`, roughly
+`r round(cs_simple$overall.se / bjs$std.error, 1)`x tighter than CS on the
+same panel.
+
+--
+
+.highlight-box[
+The cost is the flip side: imputation leans entirely on the untreated model's
+functional form, with no propensity-model insurance. If parallel trends is
+shaky, use CS's doubly-robust option or stress-test with Module 3's Honest
+DiD. Efficiency and robustness trade off.
+]
+
+---
+
+name: dcdh-main
+
+# de Chaisemartin-D'Haultfoeuille: Switchers
+
+Attack the problem one *switch* at a time. $\text{DID}_M$ averages, over every
+period where treatment status changes, the switchers' outcome change minus the
+stayers' outcome change:
+
+$$\widehat{\text{DID}}_M = \sum_{t} \frac{N_t^{sw}}{\sum_s N_s^{sw}}
+\left[\overline{\Delta Y}^{\,sw}_t - \overline{\Delta Y}^{\,stay\,0}_t\right]$$
+
+targeting the average **instantaneous** (event-time-zero) effect.
+
+--
+
+.small[
+`DIDmultiplegt` needs X11 and does not load here, so hand-code the
+instantaneous version and validate on the `dynamic` scenario (switch effect
+0.4 by construction):
+]
+
+```{r dcdh-run, echo=FALSE}
+dm |> mutate(didm = round(didm, 3)) |>
+  bind_rows(tibble(t = NA, n_sw = sum(dm$n_sw), didm = round(dm_overall, 3))) |>
+  mutate(t = ifelse(is.na(t), "overall", as.character(t))) |>
+  knitr::kable(format = "html", col.names = c("switch time", "n switchers", "DID_M"))
+```
+
+Overall `r round(dm_overall,3)` vs true 0.400. <a href="#dcdh-detail" class="inline-btn">negative weights</a>
+
+---
+
+name: fourway-main
+
+# Four Estimators, One Table
+
+Heterogeneous scenario, each estimate against the target it actually estimates.
+
+```{r fourway, echo=FALSE}
+tibble(
+  Estimator = c("TWFE (biased)", "CS simple", "Sun-Abraham", "BJS imputation",
+                "CS group", "CS dynamic"),
+  Estimate = c(twfe, cs_simple$overall.att, sa_att[["Estimate"]], bjs$estimate,
+               cs_group$overall.att, cs_dynamic$overall.att),
+  `True target` = c(true_simple, true_simple, true_simple, true_simple,
+                    true_group, true_dynamic),
+  Aggregation = c("simple", "simple", "simple", "simple", "group", "dynamic")
+) |>
+  mutate(Gap = Estimate - `True target`,
+         across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+TWFE misses its target by `r round(twfe - true_simple, 2)` (attenuated toward
+zero). The four robust estimators cluster near their targets; they differ from
+each other because they answer different aggregation questions, not because
+one is wrong. BJS is closest and tightest; CS/SA carry the never-treated draw.
+]
+
+---
+
+name: choose-main
+
+# Choosing Among the Four
+
+.small[
+| Reach for | when | watch out for |
+|---|---|---|
+| **Callaway-Sant'Anna** (`did`) | you want group-time ATTs + flexible aggregation + DR robustness | high variance with a small never-treated group |
+| **Sun-Abraham** (`fixest`) | you live in a regression workflow, want a clean event study | equals CS, not an independent robustness check |
+| **BJS** (`didimputation`) | parallel trends is credible, efficiency matters | leans on the untreated model, no DR insurance |
+| **dCDH** (`DIDmultiplegt`) | treatment turns on and off; you want the negative-weights audit | instantaneous estimand differs from a full dynamic ATT |
+]
+
+--
+
+.blue-box[
+**The workflow:** pick one workhorse (CS or BJS), report its event study with a
+*uniform* band, robustness-check with a genuinely different estimator (CS vs
+BJS, not SA vs CS). Agreement means the staggering is handled. Divergence means
+parallel trends or the control group is doing the work: investigate before you
+report.
+]
+
+---
+
+name: m2-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "You showed me a staggered DiD. Which robust estimator, and why?" | Name one (CS or BJS), state the estimand $\text{ATT}(g,t)$ plus an explicit aggregation, the control group (never vs not-yet), and how you would check it moved for the right reason. Not "I ran the package". |
+| "Your event study has a significant pre-trend but you say PT holds. Explain." | If it is a naive TWFE event study, the pre-coefficient is contaminated by other cohorts' post-effects (Sun-Abraham). Re-estimate with `sunab` or CS; a clean event study on the same data shows flat leads. |
+| "CS and Sun-Abraham gave the same number. Is that a robustness check?" | No. With never-treated controls and base period $g-1$ they are algebraically identical. A real check is CS vs BJS, which use different identification (2x2 vs imputation). |
+| "Why might BJS beat CS on precision, and when would you not trust it?" | BJS pins the counterfactual with every untreated cell, so lower variance (here 7x). But it has no propensity-model insurance: if PT is shaky, the imputed $Y(0)$ inherits the misspecification. Use DR-CS or Honest DiD. |
+| "Simple, group, and dynamic aggregations disagree. Which is right?" | All are correct estimands of different questions. Pick the one matching the decision: average lift (simple), which cohorts (group), is it still growing (dynamic). Report which and why. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Callaway and Sant'Anna (2021), *J. Econometrics* | The $\text{ATT}(g,t)$ framework, DR estimation, IF-based SEs and uniform bands; the `did` package. |
+| Sun and Abraham (2021), *J. Econometrics* | The contamination weights on naive TWFE event studies; the interaction-weighted fix; conditions for SA = CS. |
+| Borusyak, Jaravel and Spiess (2024), *ReStud* | The imputation estimator and its efficiency under parallel trends; the "forbidden extrapolation" framing. |
+| de Chaisemartin and D'Haultfoeuille (2020), *AER* | The switcher estimand $\text{DID}_M$ and the negative-weights diagnostic for TWFE. |
+| Sant'Anna and Zhao (2020), *J. Econometrics* | The doubly-robust DiD moment CS uses: consistent if the outcome *or* the propensity model is right. |
+]
+
+**Next module:** Honest DiD. All of the above assume parallel trends holds
+exactly. Module 3 asks what survives when it only *almost* holds.
+
+**Drill:** `exercise.R` reproduces CS from scratch (matches `att_gt` to 3e-15),
+hand-codes the dCDH switcher, and lines up all four estimators.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: cs-dr-derivation
+
+# Backup: The Doubly-Robust Estimator
+
+.small[
+The unconditional $\text{ATT}(g,t)$ is a 2x2 of subsample means. With
+covariates $X$ you want robustness to functional-form error. CS uses the
+Sant'Anna-Zhao (2020) doubly-robust moment: an outcome-regression model
+$m(X) = \mathbb{E}[\Delta Y \mid X, C]$ for the control trend and a propensity
+model $p(X) = \Pr(G = g \mid X)$ for group membership,
+
+$$\widehat{\text{ATT}}^{dr}(g,t) = \mathbb{E}\!\left[ \left(\frac{\mathbb{1}\{G=g\}}{\mathbb{E}[\mathbb{1}\{G=g\}]} - \frac{p(X)(1-\mathbb{1}\{G=g\})\,/\,(1-p(X))}{\mathbb{E}\!\left[p(X)(1-\mathbb{1}\{G=g\})\,/\,(1-p(X))\right]}\right) \big(\Delta Y - m(X)\big)\right].$$
+
+- Consistent if **either** $m$ or $p$ is right, not necessarily both: the
+  double robustness.
+- With no covariates, $m \equiv$ const and $p \equiv$ const, and the moment
+  collapses to the plain 2x2 difference of subsample means. That identity is
+  why `est_method = "dr"` with no `xformla` matches the hand-coded CS to
+  machine precision.
+- `est_method` alternatives: `"reg"` (outcome only), `"ipw"` (propensity
+  only). `"dr"` is the default and the safe choice.
+]
+
+<a href="#cs-controls-main" class="nav-btn-br">← back</a>
+
+---
+
+name: cs-inference-detail
+
+# Backup: Influence Functions in One Paragraph
+
+.small[
+An asymptotically linear estimator can be written
+$\hat\theta - \theta \approx \frac{1}{n}\sum_i \psi(W_i)$, where $\psi$ is the
+**influence function**: unit $i$'s marginal contribution to the estimator. Its
+variance is $\text{Var}(\hat\theta) \approx \frac{1}{n}\mathbb{E}[\psi^2]$, so
+once you have $\psi_i$ for every observation you have standard errors, and
+they correctly account for the estimated nuisance models $m$ and $p$ because
+$\psi$ is derived *after* their first-order effect is netted out (Neyman
+orthogonality).
+
+The payoff specific to CS: the $\psi$ for **all** $(g,t)$ are jointly
+available, so you can draw multiplier-bootstrap weights $\{V_i\}$ (mean 0,
+variance 1) and form $\frac{1}{n}\sum_i V_i \psi_i(g,t)$ simultaneously across
+$(g,t)$. The sup over $(g,t)$ of these bootstrap draws gives the critical value
+for a band that covers the entire path with the stated probability. That is
+why the uniform critical value (`r round(cs_dynamic$crit.val.egt, 2)` here)
+exceeds the pointwise 1.96, and why an honest event-study plot uses it.
+]
+
+<a href="#cs-inference-main" class="nav-btn-br">← back</a>
+
+---
+
+name: agg-offset-detail
+
+# Backup: The Offset Is a Draw, Not Bias
+
+.small[
+The CS estimates on the aggregation table sit above their true targets. Is
+that bias? Run the identical CS pipeline on all three effect scenarios and look
+at the gap (estimate minus true target):
+
+```{r offset-demo, echo=FALSE}
+gap_one <- function(scn) {
+  p <- make_panel(scn)
+  d <- p |> mutate(g0 = ifelse(is.finite(g), g, 0)) |>
+    select(city, t, y, g0) |> as.data.frame()
+  cs <- att_gt("y", tname = "t", idname = "city", gname = "g0", data = d,
+               control_group = "nevertreated", base_period = "universal",
+               est_method = "dr")
+  ts <- mean(p$eff[p$treated])
+  tg <- p |> filter(treated, is.finite(g)) |> group_by(g) |>
+    summarise(a = mean(eff), .groups = "drop") |> pull(a) |> mean()
+  td <- p |> filter(treated, is.finite(g)) |> mutate(e = t - g) |> group_by(e) |>
+    summarise(a = mean(eff), .groups = "drop") |> pull(a) |> mean()
+  tibble(scenario = scn,
+         simple  = aggte(cs, "simple")$overall.att  - ts,
+         group   = aggte(cs, "group")$overall.att   - tg,
+         dynamic = aggte(cs, "dynamic")$overall.att - td)
+}
+map_dfr(c("constant", "dynamic", "heterogeneous"), gap_one) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+The gap is the *same* in every scenario (about +0.25 simple, +0.20 group, +0.30
+dynamic) because the never-treated group's noise draw is identical across
+scenarios (same seed, same 6 cities), and it shifts every $\text{ATT}(g,t)$
+through the shared base-period term $\bar Y_{C,g-1}$. A true bias would scale
+with the effect size; a shared draw does not. The fix is a bigger clean control
+group (not-yet-treated) or imputation, which is why BJS nails the target.
+]
+
+<a href="#agg-numbers-main" class="nav-btn-br">← back</a>
+
+---
+
+name: sa-contam-derivation
+
+# Backup: Where the Contamination Comes From
+
+.small[
+Run the naive event-study regression with unit and time FE. By Frisch-Waugh,
+the coefficient $\mu_e$ is a comparison of the cells at relative time $e$
+against the omitted category, here $e = -1$ plus the never-treated. When cohorts have
+**different** effect paths, the time fixed effect $\lambda_t$ is itself
+contaminated: at calendar time $t$, $\lambda_t$ absorbs a blend of the treated
+cohorts' effects present at $t$. A unit sitting at event time $e$ at that same
+$t$ is differenced against this contaminated $\lambda_t$, so its coefficient
+inherits other cohorts' effects at *their* event times.
+
+Formally, Sun-Abraham show
+
+$$\mu_e = \sum_{g} \omega_{g,e}\,\delta_{g,e}
+\;+\; \sum_{e' \neq e} \sum_{g} \omega_{g,e,e'}\,\delta_{g,e'},$$
+
+a clean own-event-time piece plus a **cross-event-time** contamination piece.
+The $\omega_{g,e,e'}$ can be negative and do not vanish for $e < 0$, so a lead
+coefficient loads on other cohorts' lags. Under effect homogeneity all
+$\delta_{g,e} = \delta_e$ and the contamination cancels; under heterogeneity it
+does not. The saturated IW estimator sets each $\delta_{g,e}$ free and averages
+with cohort-share weights only, killing the second term.
+]
+
+<a href="#sa-contam-main" class="nav-btn-br">← back</a>
+
+---
+
+name: es-noisy-detail
+
+# Backup: The Same Comparison, With Noise
+
+.small[
+The main event-study slide switched the noise off to isolate contamination.
+Here is the honest panel at $\sigma = 0.3$, the one you actually estimate:
+]
+
+```{r es-noisy-plot, echo=FALSE, fig.height=3.2}
+es_noisy |>
+  pivot_longer(-e, names_to = "estimator", values_to = "att") |>
+  filter(!is.na(att)) |>
+  mutate(estimator = factor(estimator, c("Truth", "naive", "SA", "CS"))) |>
+  ggplot(aes(e, att, color = estimator, linetype = estimator)) +
+  geom_hline(yintercept = 0, color = "grey70") +
+  geom_vline(xintercept = -0.5, linetype = "dotted", color = "grey50") +
+  geom_line(linewidth = 0.9) + geom_point(size = 1.3) +
+  scale_color_manual(values = c(Truth = "black", naive = "#c62828",
+                                SA = "#1565c0", CS = "#2e7d32")) +
+  scale_linetype_manual(values = c(Truth = "solid", naive = "dashed",
+                                   SA = "solid", CS = "solid")) +
+  labs(x = "Event time e = t - g", y = "Estimated effect", color = NULL,
+       linetype = NULL, title = "With sampling noise, SA and CS overlap exactly and track Truth") +
+  theme(legend.position = "bottom")
+```
+
+.small[
+SA and CS still coincide at every $e$. All three lines now wander in the
+pre-period because of sampling noise, so a raw pre-trend test cannot separate
+contamination from noise: that is exactly why the noiseless panel is the honest
+demonstration, and why you report a *band* and stress-test with Honest DiD
+rather than eyeballing leads.
+]
+
+<a href="#es-compare-main" class="nav-btn-br">← back</a>
+
+---
+
+name: bjs-algorithm-detail
+
+# Backup: Imputation Efficiency, Precisely
+
+.small[
+Write the untreated potential outcome as $Y_{it}(0) = \alpha_i + \lambda_t + \varepsilon_{it}$. The imputation estimator:
+
+1. **Fit** $(\hat\alpha, \hat\lambda)$ by OLS on the untreated cells
+   $\mathcal{U} = \{(i,t): t < g_i\}$ (all pre-periods and never-treated).
+2. **Impute** $\hat Y_{it}(0) = \hat\alpha_i + \hat\lambda_t$ on the treated
+   cells $\mathcal{T}$.
+3. **Average** $\hat\tau_{it} = Y_{it} - \hat Y_{it}(0)$ over $\mathcal{T}$
+   with target weights.
+
+Why efficient: under parallel trends and homoskedastic $\varepsilon$, BJS show
+this is the unique linear unbiased estimator that uses *all* untreated cells to
+estimate the FE, and it attains the semiparametric variance bound. CS's 2x2
+throws away information by anchoring on one base period and one control group;
+imputation uses every untreated observation to pin $\hat\lambda_t$ and
+$\hat\alpha_i$. On this panel that is a `r round(cs_simple$overall.se / bjs$std.error, 1)`x
+SE reduction (`r round(bjs$std.error,3)` vs `r round(cs_simple$overall.se,3)`).
+
+The efficiency comes from trusting the model: the same all-cells fit that
+lowers variance also propagates any parallel-trends violation into every
+imputed $\hat Y(0)$. BJS pair the estimator with a pre-trend test and
+recommend the robust (DR or Honest) route when it fails.
+]
+
+<a href="#bjs-main" class="nav-btn-br">← back</a>
+
+---
+
+name: dcdh-detail
+
+# Backup: dCDH and Negative Weights
+
+.small[
+The switcher estimator matters most for the *diagnostic* it comes with. dCDH
+(2020) show the TWFE coefficient is $\sum_{g,t} w_{g,t}\,\text{ATT}(g,t)$ with
+weights $w_{g,t}$ that sum to one but **can be negative**. Negative weights are
+what let TWFE report a negative number when every $\text{ATT}(g,t) > 0$
+(Module 1's sign-reversal panel).
+
+The `DIDmultiplegt` package reports, for any TWFE spec, the number and mass of
+negative weights and the "minimal standard deviation of the ATTs under which
+TWFE and the true ATT have opposite signs". A tiny such number is a red flag.
+
+The full $\text{DID}_M$ handles treatment that switches **on and off**, which
+is where CS/SA/BJS (built for absorbing, staggered adoption) do not directly
+apply. In our no-exit rollout only the instantaneous piece is identified from
+switch events; the hand-coded version recovers it:
+
+```{r dcdh-detail-run, echo=FALSE}
+dm |> mutate(didm = round(didm, 3)) |>
+  knitr::kable(format = "html", col.names = c("switch time", "n switchers", "DID_M"))
+```
+
+Per-switch estimates are noisy (small stable-control groups at late switch
+times), but the switcher-weighted overall (`r round(dm_overall,3)`) recovers
+the true instantaneous effect of 0.400.
+]
+
+<a href="#dcdh-main" class="nav-btn-br">← back</a>
+
+---
+
+name: dgp-backup
+
+# Backup: The Shared DGP
+
+.small[
+```{r dgp-show, eval=FALSE}
+make_panel <- function(scenario = c("constant", "dynamic", "heterogeneous"),
+                       n_cities = 30, n_t = 60, seed = 42) {
+  scenario <- match.arg(scenario); set.seed(seed)
+  cohorts <- tibble(city = 1:n_cities,
+    g = c(rep(15, 8), rep(25, 8), rep(35, 8), rep(Inf, 6)))  # adoption week
+  expand_grid(city = 1:n_cities, t = 1:n_t) |> left_join(cohorts, by = "city") |>
+    mutate(treated = t >= g,
+      eff = case_when(!treated ~ 0,
+        scenario == "constant"      ~ 1.0,
+        scenario == "dynamic"       ~ 0.4 * (1 + 0.10 * (t - g)),
+        scenario == "heterogeneous" ~ 0.4 * (1 + 0.10 * (t - g)) *
+                                      (1 + 0.8 * (g == 15) - 0.8 * (g == 35))),
+      y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3))   # PT by construction
+}
+```
+
+Identical to Module 1, so the numbers are comparable across decks. City FE and
+a common weekly trend make parallel trends hold **by construction**: every gap
+between an estimate and its true target on these slides is either the
+estimator's design (TWFE) or finite-sample noise in a small control group (CS),
+never a real parallel-trends violation. The `heterogeneous` scenario scales the
+early cohort up 1.8x and the late cohort down to 0.2x, which is what makes the
+aggregations disagree and TWFE collapse to 0.42.
+]
+
+<a href="#cs-estimand-main" class="nav-btn-br">← back</a>
