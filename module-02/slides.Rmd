@@ -227,7 +227,11 @@ repair kit, at the level of detail an interview will probe.
 
 **Same application as Module 1:** staggered zone-notification rollout, 30
 cities, 60 weeks, cohorts at 15/25/35, 6 never-treated, parallel trends true
-by construction. All numbers are the `heterogeneous` scenario.
+by construction. All numbers are the `heterogeneous` scenario. Outcome:
+log completed trips (read: engagement or revenue per customer in a retail
+setting). The rollout itself is ops-driven, not a designed experiment;
+these estimators are what you reach for when the timing was chosen for
+business reasons, not randomized.
 
 ---
 
@@ -749,6 +753,8 @@ name: m2-interview-questions
 | "CS and Sun-Abraham gave the same number. Is that a robustness check?" | No. With never-treated controls and base period $g-1$ they are algebraically identical. A real check is CS vs BJS, which use different identification (2x2 vs imputation). |
 | "Why might BJS beat CS on precision, and when would you not trust it?" | BJS pins the counterfactual with every untreated cell, so lower variance (here 7x). But it has no propensity-model insurance: if PT is shaky, the imputed $Y(0)$ inherits the misspecification. Use DR-CS or Honest DiD. |
 | "Simple, group, and dynamic aggregations disagree. Which is right?" | All are correct estimands of different questions. Pick the one matching the decision: average lift (simple), which cohorts (group), is it still growing (dynamic). Report which and why. |
+| "You ran CS and imputation (BJS) and they diverge. What now?" | The divergence localizes the problem: CS and BJS lean on parallel trends and the control group differently, so a gap means one of those is doing more work than you think. Investigate pre-trends and control-group choice before reporting either estimate. |
+| "Your four estimators give four numbers. Which one goes in the launch review?" | They answer different questions (cell-average vs cohort-average vs event path), not a menu to pick the best-looking one. Name the estimand the decision needs first, then report that estimator; if they diverge materially, say so, it is a diagnostic. |
 ]
 
 ---
