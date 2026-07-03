@@ -1,0 +1,912 @@
+---
+title: "Module 8: Matrix Completion"
+subtitle: "and the Modern Panel Toolbox"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(fixest)
+library(did)
+library(gsynth)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r helpers, include=FALSE}
+two_way_fe <- function(Y, obs) {
+  a <- rep(0, nrow(Y)); b <- rep(0, ncol(Y)); m <- 0
+  for (k in 1:300) {
+    m_old <- m
+    m <- mean(Y[obs] - outer(a, rep(1, ncol(Y)))[obs] - outer(rep(1, nrow(Y)), b)[obs])
+    R <- Y - m - outer(rep(1, nrow(Y)), b)
+    a <- sapply(1:nrow(Y), function(i) mean(R[i, obs[i, ]]))
+    R <- Y - m - outer(a, rep(1, ncol(Y)))
+    b <- sapply(1:ncol(Y), function(t) mean(R[obs[, t], t]))
+    if (abs(m - m_old) < 1e-10 && k > 3) break
+  }
+  m + outer(a, rep(1, ncol(Y))) + outer(rep(1, nrow(Y)), b)
+}
+
+soft_impute <- function(Yr, obs, lambda, tol = 1e-8, maxit = 2000) {
+  L <- matrix(0, nrow(Yr), ncol(Yr)); d <- 0
+  for (it in 1:maxit) {
+    Z <- ifelse(obs, Yr, L)
+    s <- svd(Z); d <- pmax(s$d - lambda, 0)
+    L_new <- s$u %*% diag(d) %*% t(s$v)
+    if (sum((L_new - L)^2) < tol * max(sum(L^2), 1)) { L <- L_new; break }
+    L <- L_new
+  }
+  list(L = L, rank = sum(d > 1e-10))
+}
+
+mc_impute <- function(Y, obs, lambdas = 2^seq(-2, 4), cv_frac = 0.1, seed = 1) {
+  FEmat <- two_way_fe(Y, obs); Yr <- Y - FEmat
+  set.seed(seed)
+  oi <- which(obs); hold <- sample(oi, round(cv_frac * length(oi)))
+  obs_cv <- obs; obs_cv[hold] <- FALSE
+  FE_cv <- two_way_fe(Y, obs_cv); Yr_cv <- Y - FE_cv
+  errs <- sapply(lambdas, function(l) {
+    fit <- soft_impute(Yr_cv, obs_cv, l)
+    sqrt(mean((Yr_cv[hold] - fit$L[hold])^2))
+  })
+  lam <- lambdas[which.min(errs)]
+  fit <- soft_impute(Yr, obs, lam)
+  list(Y0 = FEmat + fit$L, lambda = lam, rank = fit$rank)
+}
+
+gs_impute_rmse <- function(Y, mask, estimator = "ife") {
+  d <- expand_grid(city = 1:nrow(Y), t = 1:ncol(Y)) |>
+    mutate(y = Y[cbind(city, t)], D = as.integer(mask[cbind(city, t)]))
+  tryCatch({
+    co <- capture.output(
+      g <- if (estimator == "ife")
+        gsynth(y ~ D, data = as.data.frame(d), index = c("city", "t"),
+               force = "two-way", CV = TRUE, r = c(0, 4), se = FALSE)
+      else
+        gsynth(y ~ D, data = as.data.frame(d), index = c("city", "t"),
+               force = "two-way", estimator = "mc", se = FALSE))
+    err <- t(g$eff)                       # N x T, actual minus imputed Y(0)
+    sqrt(mean(err[mask]^2, na.rm = TRUE))
+  }, error = function(e) NA_real_)
+}
+```
+
+```{r make-att-panel, include=FALSE}
+# staggered rollout: ops launch high-growth (high-loading) cities first
+make_att_panel <- function(n_cities = 60, n_t = 40, n_treated = 25,
+                           tau = 2.0, seed = 13, noise = 0.5) {
+  set.seed(seed)
+  f1 <- 0.12 * (1:n_t) + as.numeric(arima.sim(list(ar = 0.85), n_t, sd = 0.5))
+  f2 <- 1.2 * sin(2 * pi * (1:n_t) / 12)
+  L1 <- runif(n_cities, 0.5, 2.0); L2 <- runif(n_cities, 0.2, 1.5)
+  mu <- runif(n_cities, 20, 40)
+  score <- L1 + rnorm(n_cities, 0, 0.4)
+  treated <- rank(-score) <= n_treated
+  g <- rep(Inf, n_cities)
+  g[treated] <- round(34 - (L1[treated] - 0.5) / 1.5 * 19) +
+    sample(-2:2, n_treated, replace = TRUE)
+  g[treated] <- pmax(pmin(g[treated], 36), 13)
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    mutate(g = g[city], D = as.integer(t >= g),
+           y0 = mu[city] + L1[city] * f1[t] + L2[city] * f2[t] + rnorm(n(), 0, noise),
+           y = y0 + tau * D)
+}
+att_dat <- make_att_panel()
+att_truth <- 2.0
+```
+
+```{r compute-att, include=FALSE, cache=FALSE}
+att_twfe <- coef(feols(y ~ D | city + t, data = att_dat))[["D"]]
+
+att_d_cs <- att_dat |> mutate(g0 = ifelse(is.finite(g), g, 0)) |>
+  select(city, t, y, g0) |> as.data.frame()
+att_cs_gt <- suppressWarnings(att_gt("y", tname = "t", idname = "city", gname = "g0",
+  data = att_d_cs, control_group = "nevertreated", base_period = "universal",
+  est_method = "dr", bstrap = FALSE, cband = FALSE))
+att_cs <- suppressWarnings(aggte(att_cs_gt, type = "simple")$overall.att)
+
+att_co <- capture.output({
+  att_g_ife <- gsynth(y ~ D, data = as.data.frame(att_dat), index = c("city", "t"),
+                      force = "two-way", CV = TRUE, r = c(0, 4), se = FALSE)
+  att_g_mc  <- gsynth(y ~ D, data = as.data.frame(att_dat), index = c("city", "t"),
+                      force = "two-way", estimator = "mc", se = FALSE)
+})
+
+att_Y  <- att_dat |> select(city, t, y) |> pivot_wider(names_from = t, values_from = y) |>
+  column_to_rownames("city") |> as.matrix()
+att_Dm <- att_dat |> select(city, t, D) |> pivot_wider(names_from = t, values_from = D) |>
+  column_to_rownames("city") |> as.matrix()
+att_mc <- mc_impute(att_Y, att_Dm == 0)
+att_si <- mean(att_Y[att_Dm == 1] - att_mc$Y0[att_Dm == 1])
+
+n_treated_cities <- n_distinct(att_dat$city[att_dat$D == 1])
+n_cohorts <- n_distinct(att_dat$g[is.finite(att_dat$g)])
+n_never <- n_distinct(att_dat$city) - n_treated_cities
+```
+
+```{r make-tournament-panel, include=FALSE}
+make_factor_panel <- function(n_cities = 40, n_t = 40, seed = 11, noise = 0.5) {
+  set.seed(seed)
+  f1 <- 0.12 * (1:n_t) + as.numeric(arima.sim(list(ar = 0.85), n_t, sd = 0.5))
+  f2 <- 1.2 * sin(2 * pi * (1:n_t) / 12)
+  L1 <- runif(n_cities, 0.5, 2.0); L2 <- runif(n_cities, 0.2, 1.5)
+  mu <- runif(n_cities, 20, 40)
+  Y0 <- outer(mu, rep(1, n_t)) + outer(L1, f1) + outer(L2, f2) +
+        matrix(rnorm(n_cities * n_t, 0, noise), n_cities)
+  list(Y0 = Y0, L1 = L1, f1 = f1)
+}
+pn <- make_factor_panel()
+Y0 <- pn$Y0; N_t <- nrow(Y0); T_t <- ncol(Y0)
+
+tourn_masks <- list()
+m <- matrix(FALSE, N_t, T_t); m[which.max(pn$L1), 31:40] <- TRUE
+tourn_masks[["one unit, block"]] <- m
+set.seed(2); tr <- order(-pn$L1)[1:10]
+m <- matrix(FALSE, N_t, T_t); m[tr, 31:40] <- TRUE
+tourn_masks[["10 units, block"]] <- m
+set.seed(3); tr <- order(-pn$L1 + rnorm(N_t, 0, 0.4))[1:20]
+gg <- sample(12:36, 20, replace = TRUE)
+m <- matrix(FALSE, N_t, T_t); for (i in seq_along(tr)) m[tr[i], gg[i]:T_t] <- TRUE
+tourn_masks[["20 units, staggered"]] <- m
+set.seed(4)
+m <- matrix(FALSE, N_t, T_t); m[sample(N_t * T_t, round(0.15 * N_t * T_t))] <- TRUE
+tourn_masks[["15% random holes"]] <- m
+```
+
+```{r compute-tournament, include=FALSE, cache=FALSE}
+tourn_res <- imap_dfr(tourn_masks, function(mask, nm) {
+  obs <- !mask
+  fe_hat <- two_way_fe(Y0, obs)
+  fe_rmse <- sqrt(mean((Y0[mask] - fe_hat[mask])^2))
+  mc <- mc_impute(Y0, obs)
+  mc_rmse <- sqrt(mean((Y0[mask] - mc$Y0[mask])^2))
+  absorbing <- all(apply(mask, 1, function(r) all(diff(r) >= 0)))
+  ife_rmse <- if (absorbing) gs_impute_rmse(Y0, mask, "ife") else NA_real_
+  mcg_rmse <- if (absorbing) gs_impute_rmse(Y0, mask, "mc") else NA_real_
+  tibble(pattern = nm, fe_only = fe_rmse, gsynth_ife = ife_rmse,
+         gsynth_mc = mcg_rmse, soft_impute = mc_rmse)
+})
+```
+
+```{r compute-noiseless, include=FALSE, cache=FALSE}
+# structural claim: even with zero noise, shrinkage barely beats FE-only on a
+# trending-factor corner, while a correctly-ranked factor model is exact.
+dat0 <- make_att_panel(seed = 13, noise = 0) |> mutate(y = y0)
+Y0n <- dat0 |> select(city, t, y) |> pivot_wider(names_from = t, values_from = y) |>
+  column_to_rownames("city") |> as.matrix()
+Dmn <- dat0 |> select(city, t, D) |> pivot_wider(names_from = t, values_from = D) |>
+  column_to_rownames("city") |> as.matrix()
+obsn <- Dmn == 0
+corner_sd <- sd(Y0n[!obsn])
+FEn <- two_way_fe(Y0n, obsn)
+fe_only_rmse <- sqrt(mean((Y0n[!obsn] - FEn[!obsn])^2))
+Yrn <- Y0n - FEn
+corner_tbl <- map_dfr(c(0.5, 2, 8), function(lam) {
+  fit <- soft_impute(Yrn, obsn, lam)
+  L0hat <- FEn + fit$L
+  tibble(lambda = lam, rank = fit$rank,
+         rmse = sqrt(mean((Y0n[!obsn] - L0hat[!obsn])^2)))
+})
+dn <- expand_grid(city = 1:nrow(Y0n), t = 1:ncol(Y0n)) |>
+  mutate(y = Y0n[cbind(city, t)], D = as.integer(!obsn[cbind(city, t)]))
+co_n <- capture.output(
+  g_n <- gsynth(y ~ D, data = as.data.frame(dn), index = c("city", "t"),
+               force = "two-way", CV = TRUE, r = c(0, 4), se = FALSE))
+ife_exact_rmse <- sqrt(mean(t(g_n$eff)[!obsn]^2, na.rm = TRUE))
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td><b>8</b></td><td><b>Matrix Completion and the Modern Panel Toolbox</b> <i>(you are here)</i></td><td>current</td></tr>
+</table>
+
+---
+
+# This Module
+
+Module 1 diagnosed TWFE. Modules 2-3 repaired and stress-tested DiD. Modules
+4-5 built the synthetic-control bridge. Modules 6-7 went cross-sectional,
+from heterogeneity to deployment. This module returns to panels with an
+estimator that treats the whole causal problem as **missing data**: fill in
+the untreated potential outcome wherever it wasn't observed.
+
+--
+
+**You will be able to:**
+
+1. State the matrix-completion (MC-NNM) estimator and its nuclear-norm
+   objective, and say why fixed effects are pulled out unpenalized.
+2. Place SC, SDID, `gsynth`, and MC-NNM in one low-rank imputation family,
+   and say what each method's regularization implies about extrapolation.
+3. Decide when to reach for MC: irregular treatment patterns, missing
+   panel cells, or a control pool too thin for a fixed-rank factor model,
+   validated by hiding cells you actually observe.
+4. Use the surrogate-index idea to connect a short experimental panel to a
+   long-horizon business decision.
+
+--
+
+**Running application:** a driver-app feature rolled out city by city on
+dates ops chose for business reasons, not a randomizer. Nobody will re-run
+the launch as an experiment, so the question is retroactive: what do you do
+when the experiment you wanted was never run? Outcome $y$: weekly completed
+trips (read: engagement or revenue per customer in a retail setting).
+
+---
+
+name: imputation-main
+
+# Panel Causal Inference Is a Missing-Data Problem
+
+Every unit-period cell has a potential outcome $Y_{it}(0)$. You observe it
+for controls; for treated cells it is **missing**, not caused by treatment,
+just unobserved. Once you have $\hat Y_{it}(0)$ for every missing cell:
+
+$$\widehat{ATT} = \frac{1}{|\mathcal{M}|}\sum_{(i,t) \in \mathcal{M}} \big(Y_{it} - \hat Y_{it}(0)\big)$$
+
+--
+
+```{r pattern-fig, echo=FALSE, fig.height=3.0}
+illus <- expand_grid(unit = 1:10, period = 1:12) |>
+  mutate(
+    `one block`      = unit == 1 & period >= 9,
+    `many, block`     = unit <= 4 & period >= 9,
+    `staggered`       = (unit == 2 & period >= 5) | (unit == 5 & period >= 7) |
+                        (unit == 8 & period >= 9),
+    `irregular/holes` = (unit == 3 & period >= 6) | (unit == 7 & period >= 8) |
+                        (unit * period) %% 13 == 0
+  ) |>
+  pivot_longer(`one block`:`irregular/holes`, names_to = "pattern", values_to = "missing") |>
+  mutate(pattern = factor(pattern, levels = c("one block", "many, block",
+                                              "staggered", "irregular/holes")))
+ggplot(illus, aes(period, unit, fill = missing)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  facet_wrap(~pattern, nrow = 1) +
+  scale_fill_manual(values = c(`FALSE` = "#c5cae9", `TRUE` = "#e65100"),
+                    labels = c("observed", "missing (treated)")) +
+  labs(x = "period", y = "unit", fill = NULL,
+       title = "Four missingness patterns; every course estimator fills one better than another") +
+  theme(legend.position = "bottom")
+```
+
+Every estimator in this course is a rule for filling in the orange cells.
+
+---
+
+name: estimator-main
+
+# The MC-NNM Estimator
+
+Athey, Bayati, Doudchenko, Imbens and Khosravi (2021). Let $\mathcal{O}$ be
+the observed (untreated) cells. Solve for a low-rank matrix $L$ plus
+unpenalized two-way fixed effects:
+
+$$\min_{L,\, \alpha,\, \beta}\; \frac{1}{|\mathcal{O}|} \sum_{(i,t) \in \mathcal{O}} \big(Y_{it} - L_{it} - \alpha_i - \beta_t\big)^2 + \lambda \lVert L \rVert_*$$
+
+--
+
+- $\alpha_i, \beta_t$: unit and period fixed effects, **not penalized**.
+  Shrinkage should act on the residual interactive structure every unit and
+  period does *not* share, not on levels and trends they all share.
+- $\lVert L \rVert_*$: the **nuclear norm**, sum of singular values of $L$.
+- $\lambda$: chosen by cross-validation, held out from the **observed**
+  cells only, never the treated ones.
+- $\widehat{Y}_{it}(0) = \hat L_{it} + \hat\alpha_i + \hat\beta_t$ for every
+  missing cell.
+
+<a href="#softimpute-derivation" class="nav-btn">why the nuclear norm</a>
+
+---
+
+name: nuclear-main
+
+# Why the Nuclear Norm
+
+Minimizing $L$'s **rank** directly is combinatorial, NP-hard in general.
+The nuclear norm is its convex relaxation:
+
+$$\lVert L \rVert_* = \sum_k \sigma_k(L)$$
+
+--
+
+the sum of $L$'s singular values. It plays the same role for a matrix that
+the lasso's $\ell_1$ penalty plays for a vector: it shrinks every singular
+value and zeroes out the smallest ones, choosing the effective rank of $L$
+continuously instead of fixing it in advance.
+
+--
+
+.blue-box[
+SC and SDID fix the low-rank structure by construction (a simplex of
+donors). `gsynth`/IFE fixes it by choosing a hard rank $r$ via CV. MC-NNM is
+the one member of the family that lets the data choose *how much* rank to
+keep, cell by cell, through a single tuning parameter.
+]
+
+<a href="#softimpute-derivation" class="nav-btn">the algorithm</a>
+
+---
+
+name: algorithm-main
+
+# The Algorithm: Iterate SVD Soft-Thresholding
+
+Mazumder, Hastie and Tibshirani (2010). Fill missing cells with the current
+guess, take an SVD, shrink every singular value toward zero by $\lambda$,
+repeat to a fixed point:
+
+```{r si-show, eval=FALSE}
+soft_impute <- function(Yr, obs, lambda, tol = 1e-8, maxit = 2000) {
+  L <- matrix(0, nrow(Yr), ncol(Yr))
+  repeat {
+    Z <- ifelse(obs, Yr, L)              # fill missing cells with current L
+    s <- svd(Z)
+    d <- pmax(s$d - lambda, 0)           # soft-threshold singular values
+    L_new <- s$u %*% diag(d) %*% t(s$v)
+    if (converged(L_new, L, tol)) break
+    L <- L_new
+  }
+  L
+}
+```
+
+--
+
+Fixed effects are estimated first and pulled out; `soft_impute` runs on the
+residual $Y_r = Y - \hat\alpha_i - \hat\beta_t$. The exercise hand-codes
+exactly this loop and matches `gsynth(estimator = "mc")` to within
+tuning-procedure noise.
+
+---
+
+name: family-main
+
+# One Family: SC, SDID, `gsynth`, MC-NNM
+
+.small[
+| Method | Imputation model | Regularization | Pattern it needs |
+|---|---|---|---|
+| SC (M4) | convex combo of donors matching pre-period levels | simplex, no intercept | block, one or few treated |
+| SDID (M5) | weighted two-way FE | simplex + ridge weights, local parallel trends | block |
+| `gsynth`/IFE | factor model, rank fixed by CV, loadings by least squares | none (hard rank cutoff) | staggered OK; needs pre-periods per treated unit |
+| MC-NNM (this module) | low-rank $L$ + FE | nuclear-norm shrinkage, continuous rank | any pattern, including holes |
+]
+
+--
+
+Athey et al.'s own framing: SC-style "horizontal" regressions exploit
+cross-*unit* similarity, DiD-style "vertical" regressions exploit
+cross-*time* similarity. Matrix completion is the estimator that uses both
+at once, through the two-way FE plus a shared low-rank residual.
+
+---
+
+name: att-demo-main
+
+# Demo A: Staggered Launch, Ops-Chosen Timing
+
+`r n_treated_cities` of 60 cities get the feature; ops ship the
+fastest-growing cities first, so launch date correlates with a **latent
+growth factor**. `r n_cohorts` distinct launch weeks, `r n_never`
+never-treated cities. True effect `r sprintf("%.1f", att_truth)`.
+
+```{r att-tile, echo=FALSE, fig.height=3.6}
+att_dat |>
+  mutate(city_ord = fct_reorder(factor(city), ifelse(is.finite(g), g, 999))) |>
+  ggplot(aes(t, city_ord, fill = factor(D))) +
+  geom_tile() +
+  scale_fill_manual(values = c(`0` = "#c5cae9", `1` = "#e65100"),
+                    labels = c("pre/never treated", "treated")) +
+  labs(x = "week", y = "city (sorted by launch week)", fill = NULL,
+       title = "Cities that load high on the growth factor launch earliest") +
+  theme(axis.text.y = element_blank(), legend.position = "bottom")
+```
+
+<a href="#mc-dgp" class="nav-btn">DGP code</a>
+
+---
+
+name: att-results-main
+
+# Demo A: Results
+
+```{r att-table, echo=FALSE}
+tibble(
+  Estimator = c("TWFE", "Callaway-Sant'Anna", "gsynth (IFE)", "gsynth (MC)", "soft-impute (hand-coded)"),
+  Estimate = c(att_twfe, att_cs, att_g_ife$att.avg, att_g_mc$att.avg, att_si)
+) |>
+  mutate(`Error vs truth` = round(Estimate - att_truth, 2),
+         Estimate = round(Estimate, 2)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+TWFE and CS both inherit the launch-timing selection bias (parallel trends
+is false by construction here). Fixed-rank `gsynth`/IFE recovers the truth
+(rank `r att_g_ife$r.cv` chosen by CV). MC-NNM (`gsynth`'s own estimator and
+the hand-coded soft-impute agree to `r sprintf("%.2f", abs(att_g_mc$att.avg - att_si))`)
+lands close to TWFE, **not** close to the truth.
+]
+
+---
+
+name: extrapolation-main
+
+# Shrinkage Is an Extrapolation Policy You Choose
+
+Why MC under-corrects here: cross-validation picks $\lambda$ to predict
+**observed** cells well. The treated corner is never in that CV set, and
+shrinking singular values flattens exactly the growth-factor divergence
+that needs to be extrapolated into it.
+
+--
+
+```{r corner-table, echo=FALSE}
+tibble(
+  Method = c("FE only (ignore factors)",
+             paste0("soft-impute, lambda=", corner_tbl$lambda),
+             "gsynth/IFE (rank 2, exact)"),
+  `Corner RMSE (noiseless)` = round(c(fe_only_rmse, corner_tbl$rmse, ife_exact_rmse), 3)
+) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.small[
+Even with **zero noise**, minimum-nuclear-norm completion's corner error
+(`r sprintf("%.2f", min(corner_tbl$rmse))`-`r sprintf("%.2f", max(corner_tbl$rmse))`) is
+barely better than ignoring the factor structure entirely
+(`r sprintf("%.2f", fe_only_rmse)`), against a corner scale of
+`r sprintf("%.1f", corner_sd)`. A correctly-ranked factor model recovers it
+exactly. This is structural, not a tuning failure: shrinkage is a
+conservative default, not a free lunch.
+]
+
+<a href="#noiseless-detail" class="nav-btn-br">the noiseless test</a>
+
+---
+
+name: tournament-main
+
+# Demo B: Validate by Hiding Cells You Can See
+
+Athey et al.'s own validation recipe. No true effect here: take a 40-city
+panel with the same factor structure, **hide cells you actually observe**
+under four patterns, impute, score RMSE against the truth you happen to
+know (noise floor 0.5).
+
+```{r tourn-table, echo=FALSE}
+tourn_res |>
+  transmute(Pattern = pattern,
+            `FE only` = round(fe_only, 2),
+            `gsynth IFE` = ifelse(is.na(gsynth_ife), "cannot run", round(gsynth_ife, 2)),
+            `gsynth MC` = ifelse(is.na(gsynth_mc), "cannot run", round(gsynth_mc, 2)),
+            `soft-impute` = round(soft_impute, 2)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.small[
+Fixed-rank IFE wins whenever it can run: it exploits the exact rank of the
+factor structure. Nuclear-norm MC is consistently more conservative on
+these structured patterns (the same shrinkage cost as Demo A), but it is
+the **only** method that can even attempt the irregular pattern, and there
+it clearly beats FE-only imputation.
+]
+
+<a href="#tournament-detail" class="nav-btn">how the masks are built</a>
+
+---
+
+name: when-mc-main
+
+# When to Reach for Matrix Completion
+
+- **Irregular adoption or missing panel cells.** `gsynth`, SC, and SDID all
+  need a structured, absorbing pattern. MC-NNM is the only estimator above
+  that runs on arbitrary missingness, and Demo B shows it wins there.
+- **Many treated units, few controls.** The paper's own motivating case:
+  a thin control pool makes a hard-rank factor model noisy to estimate.
+  Check this on your own data with Demo B's recipe; in a single check
+  above, fixed-rank IFE still won even at 35 of 40 units treated, so treat
+  this as a reason to *test*, not a guarantee MC wins.
+- **You are not confident in the rank.** Continuous shrinkage degrades
+  gracefully if the true factor count is wrong; a hard-rank model can be
+  badly mis-specified with the wrong $r$.
+
+--
+
+.highlight-box[
+**Caveat.** A strongly trending confound plus a long extrapolation horizon
+favors a fixed-rank factor model (`gsynth`/IFE) with enough pre-periods per
+treated unit, exactly Demo A. Nuclear-norm shrinkage is the safer default
+when the pattern rules out fixed-rank methods entirely, or when you are
+unsure the rank is right. Always validate with the placebo-imputation
+exercise of Demo B before trusting either on your own panel.
+]
+
+---
+
+name: staggered-note-main
+
+# Staggered Adoption Across the Toolbox
+
+How the block-treatment tools of Modules 4-5 extend, or fail to:
+
+.small[
+| Pattern | What runs |
+|---|---|
+| One block, all treated together | SC, SDID, CS, BJS, `gsynth`, MC-NNM |
+| Staggered, absorbing | CS, BJS, `gsynth`/IFE, MC-NNM (not plain SC/SDID) |
+| Irregular or missing cells | MC-NNM only |
+]
+
+--
+
+The imputation view unifies modules 1-8: **BJS imputation (M2) is exactly
+the FE-only imputer above, MC-NNM with $L$ constrained to zero.** `gsynth`
+is MC-NNM with a hard, CV-chosen rank instead of continuous nuclear-norm
+shrinkage. Every DiD estimator in this course is a point on the same
+regularization dial.
+
+---
+
+name: surrogate-main
+
+# Long-Run Outcomes from Short Panels: the Surrogate Index
+
+The panel is 8 weeks. The decision cares about 12-month retention. You
+cannot wait a year to evaluate every launch.
+
+--
+
+Athey, Chetty, Imbens and Kang (2019): combine two data sources.
+
+1. **The experiment**, with short-run surrogates $S$ (trips, active days,
+   cancellation rate) alongside treatment.
+2. **Historical data** linking those same surrogates to the long-run
+   outcome $Y_{\text{long}}$, from units observed for the full horizon.
+
+--
+
+Fit the **surrogate index** $\hat h(S, X) = \hat E[Y_{\text{long}} \mid S, X]$
+on the historical sample, then use $\hat h(S_i, X_i)$ as the outcome inside
+the experiment. Its treatment-effect estimate targets the long-run effect
+without waiting for the long-run panel.
+
+<a href="#surrogate-detail" class="nav-btn">assumptions and failure modes</a>
+
+---
+
+name: decision-tree-main
+
+# Capstone: Choosing the Method
+
+.small[
+- **Can you randomize? Then randomize.** Everything below is for when you
+  cannot: a platform-wide launch, one treated market, a legal or PR
+  constraint, or a retroactive question.
+- **Staggered rollout, clean never- or late-treated controls** &rarr; CS or
+  BJS (M2), plus a **Bacon audit** of what TWFE would have mixed (M1), plus
+  **HonestDiD** sensitivity on the result (M3).
+- **One treated market, a good donor pool** &rarr; SC / ASCM / SDID (M4-M5),
+  inference by placebo or conformal methods.
+- **Irregular adoption, holes in the panel, or many treated units** &rarr;
+  matrix completion / `gsynth` (M8), validated by hiding observed cells.
+- **Need to know WHO benefits** &rarr; causal forest (M6), with calibration,
+  BLP, and RATE diagnostics before any subgroup claim.
+- **Need to decide WHO GETS the treatment** &rarr; policy tree plus
+  cross-fitted off-policy evaluation (M7).
+- **Long-run outcome, short panel** &rarr; surrogate index (M8) layered on
+  top of whichever design above supplies the experiment or quasi-experiment.
+]
+
+--
+
+.blue-box[
+This is the single most interview-useful artifact in the course: it maps a
+problem shape directly to a method, and every branch traces back to a
+module you have already built from scratch.
+]
+
+---
+
+name: m8-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "Your panel has cities adopting on 14 different dates and some missing city-weeks. Which estimator?" | The pattern rules out SC/SDID (no block). `gsynth` needs absorbing, complete adoption. MC-NNM handles arbitrary missingness; validate by hiding observed cells and scoring imputation RMSE before trusting it. |
+| "Isn't matrix completion just `gsynth`?" | Same low-rank imputation family, different regularization. `gsynth` fixes the rank and estimates loadings without shrinkage; MC-NNM shrinks singular values continuously. Shrinkage handles arbitrary patterns and thin panels but under-extrapolates a strongly trending confound. |
+| "How do you pick lambda?" | Cross-validate on held-out **observed control** cells, never on treated cells. Fixed effects stay unpenalized. Report sensitivity to lambda, not a single point. |
+| "When does matrix completion fail?" | Corner extrapolation under a strongly trending factor confound, since CV never sees the corner it needs to predict. Anticipation contaminating "untreated" cells. Treatment effects correlated with the factor structure itself. |
+| "The feature already launched everywhere over the last two quarters, on dates ops picked. Too late to measure it?" | No randomization and no clean holdout, but the panel-imputation toolbox answers it retroactively: impute each city's untreated path, validate the imputation on pre-launch data, and report sensitivity. The honest caveat is that launch timing correlated with growth needs the factor-model tools here, not a parallel-trends estimator. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Athey, Bayati, Doudchenko, Imbens and Khosravi (2021), *JASA* | The MC-NNM estimator on these slides: nuclear-norm regularized completion of the $Y(0)$ matrix. |
+| Athey, Chetty, Imbens and Kang (2019), NBER Working Paper | The surrogate index for long-horizon outcomes from short experimental panels. |
+| Xu (2017), *Political Analysis* | Generalized synthetic control / interactive fixed effects, the `gsynth`/IFE side of the family (M4). |
+| Arkhangelsky et al. (2021), *AER* | Synthetic DiD, the simplex-plus-ridge corner of the family (M5). |
+| Borusyak, Jaravel and Spiess (2024) | Imputation estimation for staggered DiD; the FE-only corner of this module's family (M2). |
+| Mazumder, Hastie and Tibshirani (2010), *JMLR* | `soft-impute`: the SVD soft-thresholding algorithm hand-coded in the exercise. |
+]
+
+**This completes the course:** estimand (M1-3), design (M4-5), heterogeneity
+(M6), deployment (M7), and the unified panel toolbox plus long-horizon
+outcomes (M8).
+
+**Drill:** `exercise.R` hand-codes soft-impute, matches it to `gsynth`, and
+runs the placebo-imputation tournament from scratch.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: softimpute-derivation
+
+# Backup: The Soft-Thresholding Step
+
+.small[
+For a fixed target $Z$ (missing cells filled with the current guess $L$),
+the singular value thresholding operator solves:
+
+$$\min_L\; \tfrac{1}{2}\lVert Z - L \rVert_F^2 + \lambda \lVert L \rVert_*$$
+
+Its solution is exact and closed-form: take the SVD $Z = U\Sigma V^\top$,
+soft-threshold every singular value by $\lambda$, and reassemble,
+$L = U\,\text{diag}(\max(\sigma_k - \lambda, 0))\,V^\top$. Iterating "fill
+missing cells with current $L$, then apply this operator" is an instance of
+majorize-minimize, and Mazumder, Hastie and Tibshirani (2010) show it
+converges to the exact minimizer of the nuclear-norm-penalized objective
+over the observed cells.
+
+**Why the fixed effects come out first.** $\alpha_i$ and $\beta_t$ are
+shared by every cell in a row or column; leaving them inside $L$ would
+force the nuclear norm to pay for level and trend structure that is not
+interactive at all, wasting rank budget and over-shrinking the part that
+actually needs it, the unit-by-time interaction.
+]
+
+<a href="#estimator-main" class="nav-btn-br">← back</a>
+
+---
+
+name: mc-dgp
+
+# Backup: The Demo A DGP
+
+.small[
+```{r dgp-show, eval=FALSE}
+make_att_panel <- function(n_cities = 60, n_t = 40, n_treated = 25,
+                           tau = 2.0, seed = 13, noise = 0.5) {
+  set.seed(seed)
+  f1 <- 0.12 * (1:n_t) + as.numeric(arima.sim(list(ar = 0.85), n_t, sd = 0.5))
+  f2 <- 1.2 * sin(2 * pi * (1:n_t) / 12)
+  L1 <- runif(n_cities, 0.5, 2.0); L2 <- runif(n_cities, 0.2, 1.5)
+  mu <- runif(n_cities, 20, 40)
+  score <- L1 + rnorm(n_cities, 0, 0.4)          # ops chase growth
+  treated <- rank(-score) <= n_treated
+  g <- rep(Inf, n_cities)
+  g[treated] <- round(34 - (L1[treated] - 0.5) / 1.5 * 19) +
+    sample(-2:2, n_treated, replace = TRUE)      # high-L1 cities launch early
+  g[treated] <- pmax(pmin(g[treated], 36), 13)
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    mutate(g = g[city], D = as.integer(t >= g),
+           y0 = mu[city] + L1[city] * f1[t] + L2[city] * f2[t] + rnorm(n(), 0, noise),
+           y = y0 + tau * D)
+}
+```
+
+- `f1`: a mildly trending, persistent (AR(0.85)) market factor. `f2`: a
+  seasonal factor.
+- `L1`, `L2`: city-specific loadings; `L1` also drives which cities launch
+  first, so launch timing and the trending factor are entangled by
+  construction. Parallel trends fails for exactly this reason.
+- True effect `r sprintf("%.1f", att_truth)`, `r n_treated_cities` treated
+  cities, `r n_never` never-treated.
+]
+
+<a href="#att-demo-main" class="nav-btn-br">← back</a>
+
+---
+
+name: noiseless-detail
+
+# Backup: The Noiseless Corner Test
+
+.small[
+Set `noise = 0` in the Demo A DGP and drop the treatment effect entirely,
+so any imputation error is pure extrapolation bias, not sampling noise.
+Hide exactly the treated corner (the same cells Demo A treats), impute with
+each method, and compare to the *known* truth.
+
+```{r corner-detail-table, echo=FALSE}
+tibble(
+  Method = c("FE only", paste0("soft-impute, lambda=", corner_tbl$lambda),
+             "gsynth/IFE"),
+  `Corner RMSE` = round(c(fe_only_rmse, corner_tbl$rmse, ife_exact_rmse), 4)
+) |> knitr::kable(format = "html")
+```
+
+The DGP's untreated potential outcome is *exactly* rank 2 after removing
+fixed effects (two factor terms, nothing else), so `gsynth`/IFE with the
+correct rank recovers it to machine precision. Nuclear-norm shrinkage,
+tuned at any of these lambdas, leaves most of the error on the table: it is
+choosing a *conservative* rank because cross-validation cannot see into the
+corner it needs to predict. This is the cleanest demonstration in the
+course that regularization choice is not cosmetic, it is a bet about what
+you are willing to extrapolate.
+]
+
+<a href="#extrapolation-main" class="nav-btn-br">← back</a>
+
+---
+
+name: surrogate-detail
+
+# Backup: Surrogate Index Assumptions and Failure Modes
+
+.small[
+**Surrogacy.** The treatment affects the long-run outcome only through the
+observed surrogates:
+
+$$Y_i(\text{long}) \perp W_i \mid S_i, X_i$$
+
+**Comparability.** The relationship $E[Y_{\text{long}} \mid S, X]$ estimated
+on the historical sample also holds in the experimental sample: no
+distribution shift in how surrogates map to the long-run outcome between
+the two populations or time periods.
+
+**Overlap.** The historical sample covers the surrogate values the
+experiment actually produces.
+
+**Estimator.** Fit $\hat h(S, X)$ by any flexible regression on the
+historical (surrogate, long-run outcome) pairs, then average
+$\hat h(S_i, X_i)$ by treatment arm in the experiment. A bonus: the index
+also **reduces noise**, since it averages away idiosyncratic long-run
+variation the surrogates don't explain, so the experiment's effective
+sample size for the long-run question is larger than running the 12-month
+panel directly.
+
+**Failure modes.** A treatment channel that bypasses the surrogates
+entirely (a fee change that leaves short-run usage flat but slowly erodes
+trust and long-run retention) breaks surrogacy silently: the index would
+report no effect while the true long-run effect is nonzero. Distribution
+shift between the historical and experimental samples (a changed product,
+a changed market) breaks comparability. Neither is directly testable from
+the experiment alone; both need domain judgment about the mechanism.
+]
+
+<a href="#surrogate-main" class="nav-btn-br">← back</a>
+
+---
+
+name: tournament-detail
+
+# Backup: How the Tournament Masks Are Built
+
+.small[
+```{r tourn-dgp-show, eval=FALSE}
+make_factor_panel <- function(n_cities = 40, n_t = 40, seed = 11, noise = 0.5) {
+  set.seed(seed)
+  f1 <- 0.12 * (1:n_t) + as.numeric(arima.sim(list(ar = 0.85), n_t, sd = 0.5))
+  f2 <- 1.2 * sin(2 * pi * (1:n_t) / 12)
+  L1 <- runif(n_cities, 0.5, 2.0); L2 <- runif(n_cities, 0.2, 1.5)
+  mu <- runif(n_cities, 20, 40)
+  outer(mu, rep(1, n_t)) + outer(L1, f1) + outer(L2, f2) +
+    matrix(rnorm(n_cities * n_t, 0, noise), n_cities)   # Y(0), no treatment
+}
+```
+
+No treatment anywhere; every RMSE is pure imputation error against a
+*known* truth, at a noise floor of 0.5. Four masks over the same panel:
+
+- **one unit, block:** the single highest-loading city, last 10 periods.
+- **10 units, block:** the ten highest-loading cities, same block.
+- **20 units, staggered:** 20 units (loading plus noise) with independently
+  drawn launch weeks 12-36.
+- **15% random holes:** 15% of all cells, uniformly at random, no unit or
+  time structure at all.
+
+`gsynth` requires an **absorbing** pattern (once missing, always missing
+going forward within a unit); the random-holes mask violates this for every
+row, so both `gsynth` columns report "cannot run" there and only the
+hand-coded, cell-by-cell soft-impute is even a candidate.
+]
+
+<a href="#tournament-main" class="nav-btn-br">← back</a>
