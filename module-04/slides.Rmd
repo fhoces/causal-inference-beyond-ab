@@ -733,7 +733,8 @@ name: rideshare-main
 One treated city, 20 donor cities, 48 months. Outcomes are driven by two latent
 factors with city-specific loadings; an airport-pickup policy hits the treated
 city at month 36 with a true effect of **`r truth`**. The treated city's loadings
-sit near the *edge* of the donor hull, so plain SC will struggle.
+sit near the *edge* of the donor hull, so plain SC will struggle. Outcome: a
+rides index (read: units sold or sessions per market in a retail setting).
 
 ```{r rideshare-plot, echo=FALSE, fig.height=3.6}
 rp |> mutate(grp = if_else(treated_unit, "Treated city", "Donor cities")) |>
@@ -748,6 +749,33 @@ rp |> mutate(grp = if_else(treated_unit, "Treated city", "Donor cities")) |>
 ```
 
 <a href="#rideshare-dgp" class="nav-btn">factor DGP code</a>
+
+---
+
+name: geo-experiment-main
+
+# From Policy Evaluation to Geo Experiments
+
+In industry, SC and augmented SC power **geo-level incrementality
+measurement** wherever user-level randomization is impossible: brand
+advertising, offline media, anything with shared market-level exposure.
+Open-source geo-experiment tooling is built on exactly this machinery.
+
+--
+
+The flip from this module's setting: here you evaluate a policy that
+already happened to one city you did not choose. In a **designed geo
+experiment** you choose the treated markets, which turns the one-treated-
+unit evaluation problem into a design problem, better donor coverage,
+pre-registered inference, the same estimator underneath.
+
+--
+
+.blue-box[
+Same math, different posture: post-hoc policy evaluation asks "what was the
+effect, given the city that got treated?"; a geo experiment asks "which
+cities should we treat so the SC estimate is as sharp as possible?"
+]
 
 ---
 
@@ -838,6 +866,7 @@ name: m4-interview-questions
 | "How do you do inference with one treated unit?" | Placebo-in-space: assign treatment to each donor, form the post/pre RMSPE ratio, exact p = rank/(J+1). Back it with placebo-in-time (backdating). Conformal SC for small pools. |
 | "When would you use augmented SC over plain SC?" | Pre-fit is good but imperfect. ASCM adds an outcome-model bias correction for the residual imbalance; equals SC when pre-fit is perfect; allows controlled extrapolation via ridge. |
 | "What does gsynth buy you over SC?" | An interactive-fixed-effects model: estimate latent factors on controls, project treated loadings, impute the counterfactual. Handles multiple treated units, covariates, and units outside the donor hull; CV picks the factor count. |
+| "Marketing ran a brand campaign in one metro. Can you tell me if it worked, since we obviously could not A/B it?" | Yes: that is the synthetic-control setting, one treated market, a donor pool, placebo inference for the p-value. And next quarter, design it as a geo experiment by choosing the treated markets deliberately instead of evaluating after the fact. |
 ]
 
 ---
