@@ -151,7 +151,10 @@ than either.
 --
 
 **Applications:** California Prop 99 (the canonical comparison), then a
-ride-share factor-structure panel where DiD breaks and SDID recovers truth.
+ride-share factor-structure panel (outcome: a rides index, read units sold
+or sessions per market in a retail setting) where DiD breaks and SDID
+recovers truth. One treated market again: there is no room to randomize a
+policy that only ever touched one city.
 
 ---
 
@@ -549,6 +552,14 @@ interactive-fixed-effects regime where SDID and `gsynth` belong and DiD does
 not.
 ]
 
+--
+
+.tiny[
+Same shape, different label: a fee change shipped in one country of a
+multi-country marketplace, or a policy applied to one product category.
+One treated unit, factor structure in the donors, same estimator.
+]
+
 ---
 
 name: guidance-main
@@ -591,6 +602,7 @@ name: m5-interview-questions
 | "Why is SDID often more precise than SC or DiD?" | Time weights concentrate the comparison on informative periods and the ridge spreads unit weight across donors, both reducing variance. On Prop 99 its SE is the smallest of the three. |
 | "You have one treated market. How do you get a standard error?" | Placebo variance: reassign treatment to controls, take the spread of placebo effects. Jackknife is undefined with one treated unit. |
 | "What is SDID's identifying assumption?" | Local parallel trends: the $\hat\omega$-weighted control moves parallel to the treated unit over the $\hat\lambda$-weighted pre-periods. Weaker than DiD's global PT. |
+| "Why did the number change when you switched from synthetic control to synthetic DiD?" | Different assumptions: SC matches levels, SDID matches trends with a level shift absorbed by the intercept. If the two agree, that is reassurance; if they diverge, the level match was doing work, and you should say which assumption you believe. |
 ]
 
 ---
