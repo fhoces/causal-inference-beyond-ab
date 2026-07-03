@@ -176,8 +176,11 @@ $\tau(x)$ with honest trees. This module is the formal treatment.
 --
 
 **Running application:** a randomized push-notification experiment on 6000
-drivers. Effect heterogeneity by city density, tenure, and peak-hour share;
-`rating` is a deliberate nuisance covariate.
+drivers. Outcome: weekly trips (read: engagement or revenue per customer in
+a retail setting). Effect heterogeneity by city density, tenure, and
+peak-hour share; `rating` is a deliberate nuisance covariate. The
+experiment ran and gave you an ATE; the decision needs more than that
+average.
 
 ---
 
@@ -634,6 +637,30 @@ RATE with the forest's own $\hat\tau$ priority: **`r round(rate_good$estimate, 2
 
 ---
 
+name: industry-vocab-main
+
+# The Same Objects Under Industry Names
+
+.small[
+| Econometrics term | Industry name | What it is here |
+|---|---|---|
+| CATE $\tau(x)$ | uplift | the causal forest's estimate (this module) |
+| RATE / AUTOC with Qini weighting | Qini curve / uplift curve | ranking quality of a targeting score |
+| treat the top fraction $q$ by predicted effect | incremental targeting | the TOC curve's x-axis |
+| ATE | incrementality / lift | what an A/B test reports |
+]
+
+--
+
+.blue-box[
+In an uplift-modeling interview these are the same objects under different
+names. Say so explicitly: "uplift modeling" is CATE estimation, a "Qini
+curve" is a RATE/TOC curve, and "incremental targeting" is thresholding
+$\hat\tau(x)$ against a cost, exactly Module 7.
+]
+
+---
+
 name: honesty-ablation-main
 
 # Diagnostic 4: the Honesty Ablation
@@ -729,6 +756,7 @@ name: m6-interview-questions
 | "It's a randomized experiment. Why bother orthogonalizing on m(x) and e(x)?" | Local centering (the R-learner) makes the estimate Neyman-orthogonal. It strips the prognostic-covariate variance out of Y, sharpening tau-hat, and protects against chance covariate imbalance even when e(x) is known. Set W.hat to the design propensity. |
 | "How do you know the heterogeneity is real and not overfitting?" | `test_calibration`: a significant differential-forest coefficient near 1. Then `rank_average_treatment_effect`: a positive RATE means the ranking is targetable; feed it a nuisance covariate and it returns a null, a built-in placebo. |
 | "Forest vs a two-model T-learner for CATE?" | The T-learner differences two noisy regressions and has no honest inference. The causal forest targets tau directly via a residual-on-residual moment, honest splitting gives valid pointwise CIs, and orthogonalization guards against confounding. Use the T-learner only as a quick baseline. |
+| "So can I tell leadership the feature works for everyone in segment X?" | No: pointwise CIs are not a uniform band, so a segment-level claim needs more than reading off one $\hat\tau(x)$. Use the best linear projection or RATE to make a defensible segment-level statement. |
 ]
 
 ---

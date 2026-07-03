@@ -94,7 +94,7 @@ class: center, middle, inverse, title-slide
 &lt;tr&gt;&lt;td&gt;5&lt;/td&gt;&lt;td&gt;&lt;a href="../module-05/slides.html"&gt;Synthetic DiD and the Bridge from SC to DiD&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;&lt;b&gt;6&lt;/b&gt;&lt;/td&gt;&lt;td&gt;&lt;b&gt;Causal Forest: Honest Splitting and Asymptotics&lt;/b&gt; &lt;i&gt;(you are here)&lt;/i&gt;&lt;/td&gt;&lt;td&gt;current&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;7&lt;/td&gt;&lt;td&gt;&lt;a href="../module-07/slides.html"&gt;Policy Learning: From HTE to Deployment Rules&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
-&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;Matrix Completion and the Modern Panel Toolbox&lt;/td&gt;&lt;td&gt;upcoming&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;&lt;a href="../module-08/slides.html"&gt;Matrix Completion and the Modern Panel Toolbox&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;/table&gt;
 
 ---
@@ -121,8 +121,11 @@ The experimentation-refresher tour showed *that* a causal forest estimates
 --
 
 **Running application:** a randomized push-notification experiment on 6000
-drivers. Effect heterogeneity by city density, tenure, and peak-hour share;
-`rating` is a deliberate nuisance covariate.
+drivers. Outcome: weekly trips (read: engagement or revenue per customer in
+a retail setting). Effect heterogeneity by city density, tenure, and
+peak-hour share; `rating` is a deliberate nuisance covariate. The
+experiment ran and gave you an ATE; the decision needs more than that
+average.
 
 ---
 
@@ -619,6 +622,30 @@ RATE with the forest's own `\(\hat\tau\)` priority: **0.59** (se 0.05). With the
 
 ---
 
+name: industry-vocab-main
+
+# The Same Objects Under Industry Names
+
+.small[
+| Econometrics term | Industry name | What it is here |
+|---|---|---|
+| CATE `\(\tau(x)\)` | uplift | the causal forest's estimate (this module) |
+| RATE / AUTOC with Qini weighting | Qini curve / uplift curve | ranking quality of a targeting score |
+| treat the top fraction `\(q\)` by predicted effect | incremental targeting | the TOC curve's x-axis |
+| ATE | incrementality / lift | what an A/B test reports |
+]
+
+--
+
+.blue-box[
+In an uplift-modeling interview these are the same objects under different
+names. Say so explicitly: "uplift modeling" is CATE estimation, a "Qini
+curve" is a RATE/TOC curve, and "incremental targeting" is thresholding
+`\(\hat\tau(x)\)` against a cost, exactly Module 7.
+]
+
+---
+
 name: honesty-ablation-main
 
 # Diagnostic 4: the Honesty Ablation
@@ -730,6 +757,7 @@ name: m6-interview-questions
 | "It's a randomized experiment. Why bother orthogonalizing on m(x) and e(x)?" | Local centering (the R-learner) makes the estimate Neyman-orthogonal. It strips the prognostic-covariate variance out of Y, sharpening tau-hat, and protects against chance covariate imbalance even when e(x) is known. Set W.hat to the design propensity. |
 | "How do you know the heterogeneity is real and not overfitting?" | `test_calibration`: a significant differential-forest coefficient near 1. Then `rank_average_treatment_effect`: a positive RATE means the ranking is targetable; feed it a nuisance covariate and it returns a null, a built-in placebo. |
 | "Forest vs a two-model T-learner for CATE?" | The T-learner differences two noisy regressions and has no honest inference. The causal forest targets tau directly via a residual-on-residual moment, honest splitting gives valid pointwise CIs, and orthogonalization guards against confounding. Use the T-learner only as a quick baseline. |
+| "So can I tell leadership the feature works for everyone in segment X?" | No: pointwise CIs are not a uniform band, so a segment-level claim needs more than reading off one `\(\hat\tau(x)\)`. Use the best linear projection or RATE to make a defensible segment-level statement. |
 ]
 
 ---
