@@ -94,7 +94,7 @@ class: center, middle, inverse, title-slide
 &lt;tr&gt;&lt;td&gt;5&lt;/td&gt;&lt;td&gt;&lt;a href="../module-05/slides.html"&gt;Synthetic DiD and the Bridge from SC to DiD&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;6&lt;/td&gt;&lt;td&gt;&lt;a href="../module-06/slides.html"&gt;Causal Forest: Honest Splitting and Asymptotics&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;&lt;b&gt;7&lt;/b&gt;&lt;/td&gt;&lt;td&gt;&lt;b&gt;Policy Learning: From HTE to Deployment Rules&lt;/b&gt; &lt;i&gt;(you are here)&lt;/i&gt;&lt;/td&gt;&lt;td&gt;current&lt;/td&gt;&lt;/tr&gt;
-&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;Matrix Completion and the Modern Panel Toolbox&lt;/td&gt;&lt;td&gt;upcoming&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;&lt;a href="../module-08/slides.html"&gt;Matrix Completion and the Modern Panel Toolbox&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;/table&gt;
 
 ---
@@ -121,7 +121,9 @@ tell us what to deploy.
 --
 
 **Running application:** the zone-notification push to 6000 drivers from
-Module 6, now with a per-push cost `\(c = 0.6\)`. When to push, and to whom?
+Module 6, now with a per-push cost `\(c = 0.6\)`. Outcome: weekly completed
+trips (read: engagement or revenue per customer in a retail setting). When
+to push, and to whom?
 
 ---
 
@@ -546,6 +548,17 @@ is "optimize deployment welfare directly on doubly-robust scores, over a class
 you can actually ship, and evaluate it honestly with cross-fitting".
 ]
 
+--
+
+.tiny[
+**Two boundary cases.** (a) Offline vs online: a stationary environment and
+a one-shot targeting rule call for learning offline from logged data, this
+module; cheap iteration and fast feedback call for a bandit that explores
+for you online. (b) A budget constraint ("treat at most `\(B\)` units") turns
+`\(\tau(x) &gt; c\)` into "treat the top `\(B\)` by score", connecting straight back to
+Module 6's TOC/RATE machinery.
+]
+
 ---
 
 name: m7-interview-questions
@@ -560,6 +573,7 @@ name: m7-interview-questions
 | "How do you know the deployed policy is actually good?" | Off-policy DR value estimate with SEs, cross-fitted so the policy is never scored on its training data. Report gain over treat-all and treat-none. |
 | "Your policy beat the oracle in the eval. Believe it?" | No. That is the optimism of same-data evaluation. Cross-fit; the honest value drops below the oracle. |
 | "The gain over treat-all is tiny. So what?" | Most units may sit near `\(\tau = c\)`; then no rule separates much value. Report the SE, and weigh interpretability and cost savings, not just the point estimate. |
+| "Finance says every push costs money. Can we just stop sending the useless ones?" | That is exactly a cost-aware policy: net the cost out of the doubly-robust scores, learn the rule on the net scores, and report the cross-fitted value against treat-all and treat-none before shipping it. |
 ]
 
 ---

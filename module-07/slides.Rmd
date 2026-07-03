@@ -192,7 +192,9 @@ tell us what to deploy.
 --
 
 **Running application:** the zone-notification push to 6000 drivers from
-Module 6, now with a per-push cost $c = 0.6$. When to push, and to whom?
+Module 6, now with a per-push cost $c = 0.6$. Outcome: weekly completed
+trips (read: engagement or revenue per customer in a retail setting). When
+to push, and to whom?
 
 ---
 
@@ -563,6 +565,17 @@ is "optimize deployment welfare directly on doubly-robust scores, over a class
 you can actually ship, and evaluate it honestly with cross-fitting".
 ]
 
+--
+
+.tiny[
+**Two boundary cases.** (a) Offline vs online: a stationary environment and
+a one-shot targeting rule call for learning offline from logged data, this
+module; cheap iteration and fast feedback call for a bandit that explores
+for you online. (b) A budget constraint ("treat at most $B$ units") turns
+$\tau(x) > c$ into "treat the top $B$ by score", connecting straight back to
+Module 6's TOC/RATE machinery.
+]
+
 ---
 
 name: m7-interview-questions
@@ -577,6 +590,7 @@ name: m7-interview-questions
 | "How do you know the deployed policy is actually good?" | Off-policy DR value estimate with SEs, cross-fitted so the policy is never scored on its training data. Report gain over treat-all and treat-none. |
 | "Your policy beat the oracle in the eval. Believe it?" | No. That is the optimism of same-data evaluation. Cross-fit; the honest value drops below the oracle. |
 | "The gain over treat-all is tiny. So what?" | Most units may sit near $\tau = c$; then no rule separates much value. Report the SE, and weigh interpretability and cost savings, not just the point estimate. |
+| "Finance says every push costs money. Can we just stop sending the useless ones?" | That is exactly a cost-aware policy: net the cost out of the doubly-robust scores, learn the rule on the net scores, and report the cross-fitted value against treat-all and treat-none before shipping it. |
 ]
 
 ---
