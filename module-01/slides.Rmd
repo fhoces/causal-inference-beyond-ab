@@ -1,0 +1,865 @@
+---
+title: "Module 1: TWFE Diagnosed"
+subtitle: "Goodman-Bacon and the Zoo of 2x2s"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(fixest)
+library(bacondecomp)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r make-panel, include=FALSE}
+make_panel <- function(scenario = c("constant", "dynamic", "heterogeneous"),
+                       n_cities = 30, n_t = 60, seed = 42) {
+  scenario <- match.arg(scenario)
+  set.seed(seed)
+  cohorts <- tibble(
+    city = 1:n_cities,
+    g = c(rep(15, 8), rep(25, 8), rep(35, 8), rep(Inf, 6))
+  )
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    left_join(cohorts, by = "city") |>
+    mutate(
+      treated = t >= g,
+      cohort = case_when(g == 15 ~ "Early (g=15)", g == 25 ~ "Mid (g=25)",
+                         g == 35 ~ "Late (g=35)", TRUE ~ "Never"),
+      eff = case_when(
+        !treated ~ 0,
+        scenario == "constant"      ~ 1.0,
+        scenario == "dynamic"       ~ 0.4 * (1 + 0.10 * (t - g)),
+        scenario == "heterogeneous" ~ 0.4 * (1 + 0.10 * (t - g)) *
+                                      (1 + 0.8 * (g == 15) - 0.8 * (g == 35))
+      ),
+      y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3)
+    )
+}
+panel <- make_panel("dynamic")
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td><b>1</b></td><td><b>TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+The experimentation-refresher tour showed *that* TWFE breaks under staggered
+adoption. This module shows *exactly how*, with the full Goodman-Bacon (2021)
+decomposition.
+
+--
+
+**You will be able to:**
+
+1. State the TWFE estimand under staggered timing as a weighted average of
+   all possible 2x2 DiD comparisons.
+2. Derive and compute the Bacon weights by hand, and replicate
+   `bacondecomp::bacon()` to machine precision.
+3. Explain the forbidden comparison and show when it flips signs.
+4. Say precisely when TWFE is still fine, and defend that in an interview.
+
+--
+
+**Running application:** staggered rollout of a driver zone-notification
+feature across 30 cities, 60 weeks, three adoption cohorts plus 6
+never-treated cities.
+
+---
+
+name: twfe-refresher-main
+
+# The Estimator Under the Microscope
+
+The two-way fixed effects (TWFE) regression:
+
+$$y_{it} = \alpha_i + \lambda_t + \beta^{DD} D_{it} + \varepsilon_{it}$$
+
+- $\alpha_i$: unit fixed effects. $\lambda_t$: period fixed effects.
+- $D_{it} \in \{0,1\}$: unit $i$ treated at time $t$.
+
+--
+
+.pull-left[
+**With 2 groups, 2 periods** this *is* the DiD estimator:
+
+$$\hat\beta^{DD} = \Delta \bar y_{\text{treat}} - \Delta \bar y_{\text{ctrl}}$$
+
+Unbiased for the ATT under parallel trends. No controversy.
+]
+
+.pull-right[
+**With staggered timing** it is still a single number, but *which* number?
+
+By Frisch-Waugh-Lovell:
+
+$$\hat\beta^{DD} = \frac{\widehat{Cov}(y_{it}, \tilde D_{it})}{\widehat{Var}(\tilde D_{it})}$$
+
+where $\tilde D_{it}$ is $D_{it}$ residualized on both fixed effects.
+]
+
+--
+
+.small[
+.highlight-box[
+Everything wrong with TWFE under staggered adoption hides inside
+$\tilde D_{it}$: units treated *the whole panel* or *never* have no
+variation left, and mid-panel switchers dominate the variance.
+]
+]
+
+<a href="#fwl-detail" class="nav-btn">FWL detail</a>
+
+---
+
+name: staggered-dgp-main
+
+# The Application: Staggered Zone-Notification Rollout
+
+30 cities, 60 weeks. Cohorts adopt at week 15, 25, 35; six cities never do.
+Outcome $y$: log completed trips.
+
+```{r dgp-plot, echo=FALSE, fig.height=4.0}
+panel |>
+  group_by(cohort, t) |>
+  summarise(y = mean(y), .groups = "drop") |>
+  ggplot(aes(t, y, color = cohort)) +
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = c(15, 25, 35), linetype = "dashed", alpha = 0.4) +
+  labs(x = "Week", y = "Mean log trips", color = NULL,
+       title = "Dynamic scenario: effects grow with time since adoption") +
+  theme(legend.position = "bottom")
+```
+
+<a href="#staggered-dgp" class="nav-btn">DGP code</a>
+
+---
+
+name: scenarios-main
+
+# Three Heterogeneity Scenarios, One DGP
+
+Same panel structure; only the treatment-effect function changes.
+
+.small[
+| Scenario | Effect for cohort $g$ at time $t$ | Interpretation |
+|---|---|---|
+| `constant` | $1.0$ | one-time level shift, same for everyone |
+| `dynamic` | $0.4\,\lbrack 1 + 0.10 (t-g)\rbrack$ | effect grows with exposure, same across cohorts |
+| `heterogeneous` | $0.4\,\lbrack 1 + 0.10 (t-g)\rbrack\,\lbrack 1 + 0.8\cdot\mathbb{1}(g{=}15) - 0.8\cdot\mathbb{1}(g{=}35)\rbrack$ | early adopters gain most |
+]
+
+--
+
+```{r scenario-table, echo=FALSE}
+res <- map_dfr(c("constant", "dynamic", "heterogeneous"), function(s) {
+  p <- make_panel(s)
+  tibble(
+    Scenario = s,
+    `True ATT` = mean(p$eff[p$treated]),
+    `TWFE estimate` = coef(feols(y ~ treated | city + t, data = p))[[1]]
+  )
+})
+res |>
+  mutate(`Bias (%)` = 100 * (`TWFE estimate` / `True ATT` - 1)) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+TWFE recovers the constant effect, loses 40% of the dynamic one, and 70%
+once cohorts differ. Nothing about the code changed. The estimator did this.
+]
+
+---
+
+name: bacon-thm-main
+
+# Goodman-Bacon (2021): The Theorem
+
+With $K$ timing groups (adoption dates), the TWFE coefficient is **exactly**
+
+$$\hat\beta^{DD} = \sum_{k \neq U} s_{kU}\, \hat\beta_{kU} + \sum_{k} \sum_{l > k} \left[ s_{kl}^{k}\, \hat\beta_{kl}^{k} + s_{kl}^{l}\, \hat\beta_{kl}^{l} \right]$$
+
+a weighted average of **every possible 2x2 DiD** in the data, with weights
+$s \geq 0$ summing to 1.
+
+--
+
+The three species in the zoo:
+
+.small[
+| 2x2 | Treatment group | Control group | Window |
+|---|---|---|---|
+| $\hat\beta_{kU}$ | cohort $k$ | never-treated $U$ | full panel |
+| $\hat\beta_{kl}^{k}$ | earlier cohort $k$ | later cohort $l$, *not yet treated* | $t < g_l$ |
+| $\hat\beta_{kl}^{l}$ | later cohort $l$ | earlier cohort $k$, **already treated** | $t \geq g_k$ |
+]
+
+--
+
+.blue-box[
+The first two are legitimate DiDs. The third uses already-treated units as
+controls: the **forbidden comparison**.
+]
+
+<a href="#bacon-derivation" class="nav-btn">derivation</a>
+
+---
+
+name: bacon-timing-main
+
+# Who Gets Compared to Whom
+
+```{r timing-diagram, echo=FALSE, fig.height=4.8}
+windows <- tribble(
+  ~comparison, ~role, ~t0, ~t1, ~grp,
+  "Early (15) vs Never",       "treatment", 1, 60, "Early",
+  "Early (15) vs Never",       "control",   1, 60, "Never",
+  "Early (15) vs Late (35),\nlate is control", "treatment", 1, 34, "Early",
+  "Early (15) vs Late (35),\nlate is control", "control",   1, 34, "Late",
+  "Late (35) vs Early (15),\nFORBIDDEN",       "treatment", 15, 60, "Late",
+  "Late (35) vs Early (15),\nFORBIDDEN",       "control",   15, 60, "Early"
+) |>
+  mutate(ypos = as.numeric(factor(paste(comparison, role))))
+adopt <- tibble(grp = c("Early", "Late"), g = c(15, 35))
+windows |>
+  left_join(adopt, by = "grp") |>
+  ggplot() +
+  geom_segment(aes(x = t0, xend = t1, y = ypos, yend = ypos, color = role),
+               linewidth = 5, alpha = 0.7) +
+  geom_point(aes(x = g, y = ypos), shape = 4, size = 4, stroke = 2,
+             na.rm = TRUE) +
+  geom_text(aes(x = t0, y = ypos + 0.28, label = grp), hjust = 0, size = 3.4) +
+  facet_wrap(~comparison, ncol = 1, scales = "free_y") +
+  scale_y_continuous(expand = expansion(add = 0.7)) +
+  scale_color_manual(values = c(treatment = "#1565c0", control = "#e65100")) +
+  labs(x = "Week", y = NULL, color = NULL,
+       title = "X marks adoption. The forbidden 2x2's control adopts inside its own window.") +
+  theme(axis.text.y = element_blank(), legend.position = "bottom")
+```
+
+---
+
+name: bacon-weights-main
+
+# The Weights
+
+Let $n_k$ be group sizes, $n_{kl} = n_k / (n_k + n_l)$ relative sizes, and
+$\bar D_k$ the share of the panel cohort $k$ spends treated. Then:
+
+.small[
+$$s_{kU} \propto (n_k + n_U)^2 \; n_{kU}(1 - n_{kU}) \; \bar D_k (1 - \bar D_k)$$
+
+$$s_{kl}^{k} \propto \left[(n_k + n_l)(1 - \bar D_l)\right]^2 \; n_{kl}(1 - n_{kl}) \; \frac{\bar D_k - \bar D_l}{1 - \bar D_l} \cdot \frac{1 - \bar D_k}{1 - \bar D_l}$$
+
+$$s_{kl}^{l} \propto \left[(n_k + n_l)\bar D_k\right]^2 \; n_{kl}(1 - n_{kl}) \; \frac{\bar D_l}{\bar D_k} \cdot \frac{\bar D_k - \bar D_l}{\bar D_k}$$
+]
+
+--
+
+**What drives a weight up:**
+
+- Bigger subsamples: the $(n_k + n_l)^2$ and $n_{kl}(1-n_{kl})$ terms.
+- Treatment-share variance $\bar D(1-\bar D)$: cohorts treated **near the
+  middle of the panel** get the most weight. Units treated very early or
+  very late contribute little identifying variance.
+
+--
+
+.highlight-box[
+Weights come from the *design* (sizes and timing), not from effect
+precision. TWFE decides what to estimate based on when your PM shipped.
+]
+
+<a href="#weights-detail" class="nav-btn">where these come from</a>
+
+---
+
+name: forbidden-main
+
+# The Forbidden Comparison, Up Close
+
+Late cohort (g=35) as treatment, Early cohort (g=15) as control, window
+$t \geq 15$. Both cohorts have strictly positive, growing effects.
+
+```{r forbidden-plot, echo=FALSE, fig.height=4.2}
+panel |>
+  filter(cohort %in% c("Early (g=15)", "Late (g=35)"), t >= 15) |>
+  group_by(cohort, t) |>
+  summarise(y = mean(y), .groups = "drop") |>
+  ggplot(aes(t, y, color = cohort)) +
+  annotate("rect", xmin = 35, xmax = 60, ymin = -Inf, ymax = Inf,
+           alpha = 0.08, fill = "#e65100") +
+  geom_line(linewidth = 1) +
+  geom_vline(xintercept = 35, linetype = "dashed") +
+  annotate("text", x = 47, y = 8.2, label = "late cohort's post window", size = 3.5) +
+  scale_color_manual(values = c("Early (g=15)" = "#e65100", "Late (g=35)" = "#1565c0")) +
+  labs(x = "Week", y = "Mean log trips", color = NULL,
+       title = "The 'control' is on its own treatment-effect trend") +
+  theme(legend.position = "bottom")
+```
+
+--
+
+The early cohort's *growing* effect is part of the control trend and gets
+**subtracted**. This 2x2 estimates $\text{ATT}_{late} - \Delta\text{ATT}_{early}$,
+not an ATT.
+
+<a href="#forbidden-detail" class="nav-btn">the algebra</a>
+
+---
+
+name: bacon-practice-main
+
+# `bacondecomp::bacon()` in Practice
+
+```{r bacon-run, results='hide'}
+library(bacondecomp)
+df <- panel |> # bacon() wants a plain data.frame, numeric treatment
+  transmute(city, t, y, treat = as.numeric(treated)) |>
+  as.data.frame()
+bd <- bacon(y ~ treat, data = df, id_var = "city", time_var = "t")
+```
+
+--
+
+```{r bacon-table}
+bd |> group_by(type) |> # aggregate the 9 2x2s to the 3 species
+  summarise(avg_estimate = weighted.mean(estimate, weight),
+            weight = sum(weight)) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+```
+
+--
+
+.highlight-box[
+A third of the total weight sits on forbidden comparisons averaging 0.08,
+against legitimate comparisons averaging around 1.1. That is the whole
+attenuation story in one table.
+]
+
+---
+
+name: bacon-scatter-main
+
+# The Diagnostic Plot: Weight vs Estimate
+
+```{r bacon-scatter, echo=FALSE, fig.height=4.6}
+truth <- mean(panel$eff[panel$treated])
+twfe_est <- coef(feols(y ~ treated | city + t, data = panel))[[1]]
+bd |>
+  ggplot(aes(weight, estimate, color = type, shape = type)) +
+  geom_hline(yintercept = twfe_est, linetype = "dashed") +
+  geom_hline(yintercept = truth, linetype = "dotted") +
+  geom_point(size = 4) +
+  annotate("text", x = 0.155, y = twfe_est - 0.07, label = "TWFE", size = 3.5) +
+  annotate("text", x = 0.155, y = truth + 0.07, label = "true ATT", size = 3.5) +
+  scale_color_manual(values = c("#1565c0", "#e65100", "#2e7d32")) +
+  labs(x = "Bacon weight", y = "2x2 DiD estimate", color = NULL, shape = NULL,
+       title = "Each point is one 2x2; TWFE is their weighted average") +
+  theme(legend.position = "bottom")
+```
+
+Every applied seminar wants this plot before believing a staggered DiD.
+
+---
+
+name: bacon-validate-main
+
+# The Decomposition Is Exact
+
+```{r validate}
+c(weighted_sum = sum(bd$estimate * bd$weight),
+  twfe         = coef(feols(y ~ treated | city + t, data = panel))[[1]])
+```
+
+--
+
+Identical to machine precision. This is an algebraic identity about OLS,
+**not an approximation and not an estimator of anything new**.
+
+--
+
+.blue-box[
+**Reading it as an estimand decomposition:** under parallel trends,
+
+$$\text{plim}\;\hat\beta^{DD} = \text{VWATT} - \Delta\text{ATT}$$
+
+a *variance-weighted* ATT minus a term collecting **within-cohort effect
+changes** that forbidden comparisons subtract. Constant effects kill
+$\Delta\text{ATT}$; dynamics feed it.
+]
+
+<a href="#estimand-detail" class="nav-btn">full estimand decomposition</a>
+
+---
+
+name: twfe-ok-main
+
+# When TWFE Is Perfectly Fine
+
+Run the identical decomposition on the `constant` scenario:
+
+```{r constant-bacon, echo=FALSE}
+p_const <- make_panel("constant")
+df_c <- p_const |>
+  transmute(city, t, y, treat = as.numeric(treated)) |>
+  as.data.frame()
+junk <- capture.output( # suppress bacon()'s auto-printed summary
+  bd_c <- bacon(y ~ treat, data = df_c, id_var = "city", time_var = "t"))
+bd_c |> group_by(type) |>
+  summarise(avg_estimate = weighted.mean(estimate, weight),
+            weight = sum(weight)) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+Weights are unchanged (they depend only on the design). But now **every 2x2
+estimates the same 1.0**, so the weighting is harmless.
+
+--
+
+**TWFE is unbiased for the ATT when:**
+
+1. Effects are homogeneous across cohorts *and* constant in event time; or
+2. Adoption is *not* staggered (single treatment date, 2x2 world); or
+3. You are willing to interpret VWATT as the estimand and effects are
+   stable over time.
+
+.highlight-box[
+The interview answer is not "TWFE is broken". It is: "TWFE estimates a
+variance-weighted average of 2x2s; here is when that coincides with the
+ATT, and here is the diagnostic I would run."
+]
+
+---
+
+name: negative-weights-main
+
+# From Attenuation to Sign Reversal
+
+Bacon weights are non-negative *on the 2x2 estimates*. The scary headlines
+("negative weights") are about the implied weights **on the underlying
+cohort-time effects** $ATT(g,t)$ inside those 2x2s.
+
+--
+
+- Each forbidden $\hat\beta_{kl}^{l}$ contains $-\Delta ATT_k$: early-cohort
+  effect *growth* enters with a negative sign.
+- Our panel resists a full flip because 6 never-treated cities anchor half
+  the weight on clean comparisons. **Remove them** (everyone eventually
+  adopts, common at a company that ships everywhere) and forbidden 2x2s take
+  over.
+
+--
+
+```{r sign-demo, echo=TRUE}
+set.seed(42) # no never-treated group: 3 cohorts of 10, everyone adopts
+flip <- expand_grid(city = 1:30, t = 1:60) |>
+  left_join(tibble(city = 1:30, g = rep(c(15, 25, 35), each = 10)), by = "city") |>
+  mutate(treated = t >= g,
+         eff = if_else(treated, 0.2 + 0.15 * (t - g), 0), # mild dynamics
+         y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3))
+c(true_ATT = mean(flip$eff[flip$treated]),
+  TWFE     = coef(feols(y ~ treated | city + t, data = flip))[[1]])
+```
+
+--
+
+Every $ATT(g,t) > 0$, TWFE **negative**. de Chaisemartin and D'Haultfoeuille
+(2020) formalize the implicit weights behind this; that is Module 2
+territory.
+
+---
+
+name: diagnostics-main
+
+# Practitioner Checklist for Any Staggered Rollout
+
+Before reporting a staggered TWFE estimate:
+
+.small[
+| Step | Tool | What you learn |
+|---|---|---|
+| 1. Map the cohorts | `count(g)` | how much never-treated glue you have |
+| 2. Bacon decomposition | `bacondecomp::bacon()` | weight on forbidden comparisons |
+| 3. Weight-vs-estimate scatter | previous slide | which 2x2s drive the coefficient |
+| 4. Compare vs robust estimator | CS / SA / BJS (Module 2) | how much the answer moves |
+| 5. Event-study with robust estimator | Module 2 | dynamics, pre-trends |
+]
+
+--
+
+.blue-box[
+**Rules of thumb.** Forbidden weight near zero and effects plausibly stable:
+TWFE is probably fine, say why. Forbidden weight 30%+ or visible dynamics:
+robust estimators are not optional.
+]
+
+--
+
+At Amazon scale (staggered feature launches across marketplaces, fulfillment
+centers, product categories), staggering is the *default*, not the edge case.
+
+---
+
+name: m1-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "We rolled a feature out city by city and ran TWFE. What could go wrong?" | Staggered timing makes TWFE a weighted average of 2x2s including already-treated controls; with dynamic effects it is biased toward zero or beyond. Run the Bacon decomposition. |
+| "What exactly is a forbidden comparison?" | A 2x2 using an earlier-treated cohort as control during its own post period; its effect *changes* get subtracted from the later cohort's estimate. |
+| "When would you still trust TWFE?" | Non-staggered designs; effects constant in event time and across cohorts; or when forbidden-comparison weight is negligible and you can defend effect stability. |
+| "Can TWFE flip the sign of a true positive effect?" | Yes: strong effect dynamics make forbidden 2x2s increasingly negative, and they can dominate. Demonstrated with all $ATT(g,t) > 0$ and TWFE $< 0$. |
+| "What determines the Bacon weights?" | Group sizes and treatment-share variance $\bar D(1-\bar D)$: mid-panel cohorts dominate. Design, not effect size or precision. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Goodman-Bacon (2021), *J. Econometrics* | The decomposition on these slides: exact weights, VWATT vs $\Delta$ATT estimand reading. |
+| de Chaisemartin and D'Haultfoeuille (2020), *AER* | Implicit ATT(g,t) weights for general two-way FE designs; can be negative; robust switcher estimator. |
+| Borusyak, Jaravel and Spiess (2024), *ReStud* | Imputation view: efficiency under parallel trends, the "forbidden extrapolation" framing. |
+| Baker, Larcker and Wang (2022), *JFE* | How much this matters in published finance DiDs: a lot. |
+| Roth, Sant'Anna, Bilinski and Poe (2023), *J. Econometrics* | Survey tying the whole modern DiD literature together. |
+]
+
+**Next module:** the estimators that fix this: Callaway-Sant'Anna,
+Sun-Abraham, BJS imputation, dCDH.
+
+**Drill:** `exercise.R` hand-codes all nine 2x2s and their weights, and
+replicates `bacon()` to 1e-14.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: staggered-dgp
+
+# Backup: The DGP
+
+.small[
+```{r dgp-show, eval=FALSE}
+make_panel <- function(scenario = c("constant", "dynamic", "heterogeneous"),
+                       n_cities = 30, n_t = 60, seed = 42) {
+  scenario <- match.arg(scenario)
+  set.seed(seed)
+  cohorts <- tibble(
+    city = 1:n_cities,
+    g = c(rep(15, 8), rep(25, 8), rep(35, 8), rep(Inf, 6)) # adoption week
+  )
+  expand_grid(city = 1:n_cities, t = 1:n_t) |>
+    left_join(cohorts, by = "city") |>
+    mutate(
+      treated = t >= g,
+      eff = case_when(
+        !treated ~ 0,
+        scenario == "constant"      ~ 1.0,
+        scenario == "dynamic"       ~ 0.4 * (1 + 0.10 * (t - g)),
+        scenario == "heterogeneous" ~ 0.4 * (1 + 0.10 * (t - g)) *
+                                      (1 + 0.8 * (g == 15) - 0.8 * (g == 35))
+      ),
+      y = 5 + 0.05 * t + city * 0.1 + eff + rnorm(n(), 0, 0.3) # common trend
+    )
+}
+```
+]
+
+.small[
+- City FE ( $0.1 \times$ city index) and a common weekly trend $0.05t$: parallel
+  trends holds **by construction**. Every bias on the main slides is purely the
+  estimator, never a PT violation.
+- Noise $\sigma = 0.3$ is small relative to effects, so decomposition tables are
+  stable and readable.
+]
+
+<a href="#staggered-dgp-main" class="nav-btn-br">← back</a>
+
+---
+
+name: fwl-detail
+
+# Backup: The FWL View of TWFE
+
+.small[
+Frisch-Waugh-Lovell: the TWFE coefficient equals OLS of $y$ on double-demeaned
+treatment,
+
+$$\tilde D_{it} = D_{it} - \bar D_i - \bar D_t + \bar{\bar D}$$
+
+$$\hat\beta^{DD} = \frac{\sum_{it} \tilde D_{it}\, y_{it}}{\sum_{it} \tilde D_{it}^2}$$
+
+Three consequences:
+
+1. $y$ enters linearly with weights $\tilde D_{it} / \sum \tilde D^2$: TWFE is a
+   fixed linear combination of cell means, which is why an exact decomposition
+   into 2x2s exists at all.
+2. A unit treated for the entire panel has $D_{it} = \bar D_i = 1$, so
+   $\tilde D_{it} \approx 0$: always-treated units contribute *nothing* to
+   identification, they only sharpen the FE estimates.
+3. $\sum \tilde D_{it}^2$ is maximized for units treated half the panel: this is
+   exactly the $\bar D_k (1 - \bar D_k)$ term in the Bacon weights.
+
+The decomposition then follows from partitioning $\sum \tilde D \tilde y$ by
+timing-group pairs and completing each piece into a 2x2 DiD (next backup).
+]
+
+<a href="#twfe-refresher-main" class="nav-btn-br">← back</a>
+
+---
+
+name: bacon-derivation
+
+# Backup: Deriving the Decomposition (1 of 2)
+
+.small[
+Setup: timing groups $a$ (earlier, adoption $g_a$), $b$ (later), $U$ (never).
+Within any **pair** of groups, restricted to the right **window**, the panel is
+a plain 2x2: one group changes status, the other does not.
+
+**Step 1: partition the identifying variance.** Write the total demeaned
+variance $\widehat{Var}(\tilde D)$ as a sum over group pairs and windows.
+Every $(i,t)$ cell belongs to some pair-window combination, and within each,
+demeaned treatment has the 2x2 structure.
+
+**Step 2: each piece is a 2x2 DiD.** For a pair $(k, U)$, OLS on the subsample
+is textbook DiD:
+
+$$\hat\beta_{kU} = \left[\bar y_k^{post(k)} - \bar y_k^{pre(k)}\right] -
+\left[\bar y_U^{post(k)} - \bar y_U^{pre(k)}\right]$$
+
+For timing pairs $(k, l)$ with $g_k < g_l$, the window splits in two:
+
+- $t < g_l$: only $k$ switches. Control = $l$ (not yet treated). This is
+  $\hat\beta_{kl}^{k}$.
+- $t \geq g_k$: only $l$ switches. Control = $k$ (treated throughout). This is
+  $\hat\beta_{kl}^{l}$, the forbidden one.
+]
+
+<a href="#bacon-thm-main" class="nav-btn-br">← back</a>
+
+---
+
+count: false
+
+# Backup: Deriving the Decomposition (2 of 2)
+
+.small[
+**Step 3: reassemble.** OLS on the full sample equals the variance-weighted
+average of the subsample OLS coefficients:
+
+$$\hat\beta^{DD} = \sum_{\text{pieces } p} \underbrace{\frac{\widehat{Var}_p(\tilde D)\, n_p}{\sum_q \widehat{Var}_q(\tilde D)\, n_q}}_{s_p} \hat\beta_p$$
+
+Computing $\widehat{Var}_p(\tilde D)$ for each piece type gives the formulas on
+the weights slide:
+
+- Within a $(k,U)$ piece, treatment share is $n_{kU}$ across units and
+  $\bar D_k$ across time: variance $n_{kU}(1-n_{kU}) \bar D_k(1-\bar D_k)$.
+- The timing pieces get the analogous terms with the window lengths
+  $(1 - \bar D_l)$ or $\bar D_k$ scaling how much panel they occupy: the
+  squared leading factors.
+
+**Why weights are positive:** they are variances times sample shares. All the
+sign trouble lives inside the $\hat\beta_{kl}^{l}$ *estimates*, not the weights.
+
+Full details: Goodman-Bacon (2021), Theorem 1 and Appendix A. The exercise
+implements exactly these formulas and matches `bacon()` to 1e-16 on weights.
+]
+
+<a href="#bacon-thm-main" class="nav-btn-br">← back</a>
+
+---
+
+name: weights-detail
+
+# Backup: Reading the Weight Formulas
+
+.small[
+$$s_{kU} \propto (n_k + n_U)^2\, n_{kU}(1-n_{kU})\, \bar D_k(1-\bar D_k)$$
+
+Three factors, three design questions:
+
+| Factor | Question it answers |
+|---|---|
+| $(n_k + n_U)^2$ | how big is this subsample relative to the panel? |
+| $n_{kU}(1 - n_{kU})$ | how balanced are treatment and control *groups*? |
+| $\bar D_k (1 - \bar D_k)$ | how balanced are pre and post *periods*? |
+
+For timing pairs, the same three factors appear, but the window is shorter:
+the leading factor becomes $\left[(n_k+n_l)(1-\bar D_l)\right]^2$ for the
+early-vs-late piece (window is $l$'s pre-period, length share $1-\bar D_l$)
+and $\left[(n_k+n_l)\bar D_k\right]^2$ for the forbidden piece (window is
+$k$'s post-period, length share $\bar D_k$).
+
+**Worked example from the deck's panel:** cohort g=25 spends
+$\bar D = 36/60 = 0.6$ of the panel treated, closest of the three cohorts to
+$0.5$, and the never-treated group is large, so $s_{25,U} = 0.18$ is the
+biggest single vs-never weight even though all cohorts have 8 cities.
+
+Consequence worth saying in an interview: **two rollouts with identical
+effects but different calendars give different TWFE estimands.**
+]
+
+<a href="#bacon-weights-main" class="nav-btn-br">← back</a>
+
+---
+
+name: forbidden-detail
+
+# Backup: The Forbidden 2x2, Algebraically
+
+.small[
+Take the pair early $k$ (adopts $g_k$), late $l$ (adopts $g_l > g_k$), window
+$t \geq g_k$ where $k$ is treated throughout. Split the window at $g_l$:
+$W_1 = \lbrack g_k, g_l)$ and $W_2 = \lbrack g_l, T\rbrack$. With parallel
+trends in untreated outcomes and writing $\text{ATT}_k(W)$ for cohort $k$'s
+average effect over window $W$:
+
+$$\hat\beta_{kl}^{l} \;\xrightarrow{p}\;
+\underbrace{\text{ATT}_l(W_2)}_{\text{what you want}} \;-\;
+\underbrace{\left[\text{ATT}_k(W_2) - \text{ATT}_k(W_1)\right]}_{\text{control group's effect drift}}$$
+
+- **Constant effects:** $\text{ATT}_k(W_2) = \text{ATT}_k(W_1)$, the drift term
+  dies, and the forbidden 2x2 is a fine estimate of $\text{ATT}_l$.
+- **Dynamic effects:** $k$'s effect keeps growing into $W_2$, the drift term is
+  positive and gets subtracted: attenuation, and with strong dynamics, sign
+  reversal.
+
+In the deck's dynamic panel: the (35 vs 15) forbidden estimate is $-0.005$
+while the true $\text{ATT}_{35}(W_2) \approx 0.9$. The early cohort's drift
+over weeks 35-60 was that large.
+
+This is also why the *constant* scenario is immune despite identical weights:
+weights did not change, the drift terms all vanished.
+]
+
+<a href="#forbidden-main" class="nav-btn-br">← back</a>
+
+---
+
+name: estimand-detail
+
+# Backup: The Estimand Decomposition
+
+.small[
+Take plims under parallel trends for untreated potential outcomes. Goodman-Bacon
+shows
+
+$$\text{plim}\; \hat\beta^{DD} = \text{VWATT} + \text{VWCT} - \Delta\text{ATT}$$
+
+| Term | Meaning | Dies when |
+|---|---|---|
+| VWATT | variance-weighted ATT: each 2x2's ATT weighted by the Bacon $s$ | never (this is the "good" part) |
+| VWCT | variance-weighted common trend: PT violations across pairs | parallel trends holds |
+| $\Delta$ATT | weighted sum of *within-cohort effect changes* subtracted by forbidden 2x2s | effects constant in event time |
+
+Three readings:
+
+1. Even with PT and constant effects, TWFE targets **VWATT**, not the ATT: the
+   variance weighting is a different aggregation than "average over treated
+   cells". With constant effects they coincide.
+2. Dynamics enter *only* through $\Delta$ATT, and always with a minus sign:
+   dynamic effects bias TWFE **toward zero and beyond**, never away from zero.
+3. PT violations and heterogeneity bias are *separate terms*: fixing one does
+   not fix the other. Module 2 fixes $\Delta$ATT; Module 3 stress-tests VWCT.
+]
+
+<a href="#bacon-validate-main" class="nav-btn-br">← back</a>
