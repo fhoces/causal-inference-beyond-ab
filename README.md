@@ -1,9 +1,11 @@
 # Causal Inference Beyond A/B Tests
 
-A deep-dive companion to the [experimentation refresher](../experimentation-refresher/),
+A deep-dive companion to the [experimentation refresher](https://github.com/fhoces/experimentation-refresher),
 specifically expanding the three methods covered as a tour in that course's
 Module 8: modern difference-in-differences, synthetic control, and causal
 forests for heterogeneous treatment effects.
+
+**Live site:** [fhoces.github.io/causal-inference-beyond-ab](https://fhoces.github.io/causal-inference-beyond-ab/) (rendered slides and notes).
 
 ## Status
 
@@ -36,6 +38,8 @@ See [learning-plan.md](learning-plan.md) for the full breakdown.
 | 7 | [Policy Learning: From τ̂(x) to Deployment Rules](module-07/concepts.md) | done |
 | 8 | [Matrix Completion and the Modern Panel Toolbox](module-08/concepts.md) | done |
 
+Module 8 closes with the course capstone: a method-selection decision tree mapping problem shape to estimator, the single most interview-useful artifact in the course.
+
 ## Domain
 
 Following the convention of the sibling course collection, applications use
@@ -51,6 +55,15 @@ market, and targeted incentives.
 Each module follows the standard concept → show → drill pattern from the
 sibling courses: `concepts.md` for the written reference, `slides.Rmd` for
 the xaringan deck, and `exercise.R` for runnable drills.
+
+## Running the exercises
+
+Each module's `exercise.R` is self-contained: run it directly with
+`Rscript module-0N/exercise.R`. The R packages needed across the course are
+`fixest`, `did`, `didimputation`, `HonestDiD`, `Synth`, `gsynth`, `synthdid`,
+`augsynth`, `grf`, `quadprog`, `bacondecomp`, `policytree`, plus tidyverse.
+Every script ends with a block of assertions, exiting 0 when all checks
+pass.
 
 ## Stack
 
