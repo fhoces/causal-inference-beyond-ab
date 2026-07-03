@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Module 2: Heterogeneity-Robust DiD — Concepts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="module-2-heterogeneity-robust-did">Module 2: Heterogeneity-Robust DiD</h1>
+<p>Module 1 diagnosed the disease: under staggered adoption TWFE is a
+variance-weighted average of every 2x2, and the forbidden comparisons
+(already-treated units as controls) subtract other cohorts' effect
+dynamics. This module is the cure. Four estimators that use only <strong>clean</strong>
+comparisons (treated vs never-treated or not-yet-treated), plus the
+aggregation choices that decide <em>which</em> average you end up reporting.</p>
+<p>The running application is the same staggered zone-notification rollout: 30
+cities, 60 weeks, cohorts at weeks 15/25/35 (8 cities each) plus 6
+never-treated cities, parallel trends true by construction. Every number
+below is on the <code>heterogeneous</code> scenario unless stated otherwise.</p>
+<h2 id="callaway-and-santanna-2021-the-workhorse">Callaway and Sant'Anna (2021): the workhorse</h2>
+<h3 id="the-estimand-group-time-att">The estimand: group-time ATT</h3>
+<p>TWFE collapses a two-dimensional object into one number. CS refuses to
+collapse. The building block is the <strong>group-time average treatment effect</strong>,</p>
+<p>$$\text{ATT}(g, t) = \mathbb{E}!\left[Y_t(g) - Y_t(0) \mid G = g\right],$$</p>
+<p>the effect at calendar time $t$ on the cohort first treated at $g$ (where
+$G=g$ indexes the cohort and $Y_t(0)$ is the never-treated potential
+outcome). Two indices, deliberately kept apart: a cohort dimension $g$ and a
+time dimension $t$. Everything else in CS is a choice about how to identify
+each $\text{ATT}(g,t)$ and how to average them back down.</p>
+<h3 id="identification-which-controls-which-base-period">Identification: which controls, which base period</h3>
+<p>For $t \geq g$, under parallel trends and no anticipation, $\text{ATT}(g,t)$
+is a clean 2x2 DiD between cohort $g$ and a comparison group $C$, anchored at
+a pre-period base:</p>
+<p>$$\text{ATT}(g, t) = \big[\bar Y_{g,t} - \bar Y_{g,g-1}\big]
+- \big[\bar Y_{C,t} - \bar Y_{C,g-1}\big].$$</p>
+<p>Two identification levers:</p>
+<ul>
+<li><strong>Comparison group $C$.</strong> <em>Never-treated</em> uses only the 6 cities that never
+  adopt: cleanest, but throws away information and is high-variance when the
+  never-treated group is small. <em>Not-yet-treated</em> adds, for each $(g,t)$, any
+  cohort not treated by $t$ (cohorts with $G &gt; t$, plus the never-treated):
+  more controls, lower variance, valid under the same parallel-trends
+  assumption extended to the not-yet-treated.</li>
+<li><strong>Base period.</strong> The <em>universal</em> base fixes the anchor at $g-1$ (cohort
+  $g$'s last pre-treatment period) for every $t$, so each $\text{ATT}(g,t)$ is
+  a direct test of "did the gap move from $g-1$ to $t$?" The <em>varying</em> base
+  uses $t-1$, which re-anchors as $t$ moves and is the natural choice for
+  building an event study from long differences. Universal base is what makes
+  CS coincide with Sun-Abraham.</li>
+</ul>
+<h3 id="the-doubly-robust-estimator">The doubly-robust estimator</h3>
+<p>The formula above is the unconditional version. With covariates $X$ you want
+robustness to functional-form error. CS uses the <strong>doubly-robust</strong> moment
+(Sant'Anna and Zhao 2020): combine an outcome-regression model
+$m(X) = \mathbb{E}[\Delta Y \mid X, C]$ for the control trend with a
+propensity model $p(X) = \Pr(G = g \mid X)$ for group membership,</p>
+<p>$$\widehat{\text{ATT}}^{dr}(g,t) = \mathbb{E}!\left[ \left(\frac{\mathbb{1}{G=g}}{\mathbb{E}[\mathbb{1}{G=g}]} - \frac{p(X)(1-\mathbb{1}{G=g})\,/\,(1-p(X))}{\mathbb{E}[p(X)(1-\mathbb{1}{G=g})\,/\,(1-p(X))]}\right)\big(\Delta Y - m(X)\big)\right].$$</p>
+<p>Consistent if <em>either</em> $m$ or $p$ is correctly specified, not both. With no
+covariates both models are trivial and the estimator collapses back to the
+2x2 of subsample means: <code>est_method = "dr"</code> with no <code>xformla</code> returns exactly
+the hand-coded difference. That identity is the exercise's validation target
+and it holds to machine precision (3e-15 here).</p>
+<h3 id="inference-influence-functions-and-uniform-bands">Inference: influence functions and uniform bands</h3>
+<p>CS derives the <strong>influence function</strong> of each $\widehat{\text{ATT}}(g,t)$,
+the observation-level score whose sample variance is the estimator's
+variance. That buys two things. First, analytic standard errors that account
+for the estimated nuisance models. Second, because the influence functions
+for all $(g,t)$ are jointly available, a <strong>multiplier bootstrap</strong> delivers
+<em>uniform</em> confidence bands: intervals that cover the entire ATT path
+simultaneously, not one point at a time. The simultaneous critical value
+exceeds the pointwise 1.96 (here 2.90 for the dynamic aggregation), so honest
+event-study plots use the wider band. <code>did</code> clusters at the unit level by
+default and turns on <code>bstrap</code> and <code>cband</code> automatically.</p>
+<h2 id="aggregation-simple-group-dynamic">Aggregation: simple, group, dynamic</h2>
+<p>$\text{ATT}(g,t)$ is a surface. A headline number is a weighted average over
+it, and the weights are a modeling choice that changes the answer.</p>
+<table>
+<thead>
+<tr>
+<th>Aggregation</th>
+<th>Averages over</th>
+<th>Answers</th>
+<th>True target here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>simple</strong></td>
+<td>every treated $(g,t)$ cell equally</td>
+<td>"average effect across all treated place-weeks"</td>
+<td>1.407</td>
+</tr>
+<tr>
+<td><strong>group</strong></td>
+<td>cohorts (weighted by cohort size), each cohort's post-effects averaged</td>
+<td>"average effect per treated cohort"</td>
+<td>1.207</td>
+</tr>
+<tr>
+<td><strong>dynamic</strong></td>
+<td>event time $e = t - g$, equal weight per $e$</td>
+<td>"how does the effect evolve with exposure?"</td>
+<td>1.792</td>
+</tr>
+</tbody>
+</table>
+<p>These are genuinely different estimands and they differ numerically. On this
+panel the true targets are 1.41, 1.21, and 1.79. The dynamic average is
+largest because it equal-weights event times, and at long exposure only the
+early high-effect cohort survives, so long-$e$ periods (dominated by the big
+cohort) get full weight. The group average is smallest because it gives the
+low-effect late cohort the same cohort weight as the high-effect early one.
+Report the aggregation that matches the decision: simple for a rollout's
+average lift, group to see which cohorts drove it, dynamic to judge whether
+the effect is still growing.</p>
+<p>A practical caution specific to this panel: CS with only 6 never-treated
+cities is high-variance. The point estimates sit above the true targets by a
+fixed amount (about +0.25 for simple, +0.20 for group, +0.30 for dynamic),
+and that offset is <em>identical across all three effect scenarios</em>, which is the
+signature of a shared finite-sample draw in the small never-treated anchor,
+not bias. Standard errors are correspondingly large (0.10 to 0.25). This is
+exactly the setting where imputation wins.</p>
+<h2 id="sun-and-abraham-2021-fixing-the-event-study">Sun and Abraham (2021): fixing the event study</h2>
+<h3 id="the-contamination-problem">The contamination problem</h3>
+<p>The reflex diagnostic for DiD is the TWFE event study: regress the outcome on
+leads and lags of treatment, $y_{it} = \alpha_i + \lambda_t + \sum_{e \neq -1}
+\mu_e \, \mathbb{1}{t - g_i = e} + \varepsilon_{it}$, and read $\mu_e$ as the
+effect $e$ periods after adoption. Sun and Abraham show each $\mu_e$ is <em>not</em>
+the average effect at relative time $e$. It is a weighted sum of cohort-specific
+effects at $e$ <strong>and at other relative times</strong>, with weights that can be
+negative and need not sum to one within $e$. The contamination is worst under
+cohort heterogeneity: a lead coefficient $\mu_{-3}$ can pick up post-treatment
+effects of a different cohort, producing a <strong>nonzero pre-trend even when
+parallel trends holds exactly</strong>.</p>
+<p>You can see it with the noise switched off. On the deterministic panel (no
+sampling error, parallel trends exact by construction) the naive TWFE event
+study still shows pre-period coefficients growing to 0.145 and post
+coefficients attenuated below the truth. Every wiggle is contamination, not
+noise. The Sun-Abraham and CS event studies on the same deterministic panel
+return exactly zero pre and the exact post path.</p>
+<h3 id="the-interaction-weighted-estimator">The interaction-weighted estimator</h3>
+<p>The fix is to saturate: interact every cohort with every relative time,</p>
+<p>$$y_{it} = \alpha_i + \lambda_t + \sum_{g}\sum_{e \neq -1}
+\delta_{g,e}\, \mathbb{1}{G_i = g}\,\mathbb{1}{t - g = e} + \varepsilon_{it},$$</p>
+<p>so $\delta_{g,e}$ is a clean cohort-specific effect. Then average the
+$\delta_{g,e}$ across cohorts at each $e$ using <strong>each cohort's share of
+treated units</strong> as weights: the interaction-weighted (IW) estimator. Because
+the weights are cohort shares, they are non-negative and sum to one, and no
+cohort's effect leaks into another relative time. <code>fixest::sunab()</code> builds the
+saturated design and the aggregation in one call; the never-treated cohort is
+coded as a large finite value so it acts as the excluded control.</p>
+<h3 id="when-sa-equals-cs">When SA equals CS</h3>
+<p>The IW estimator equals CS <strong>when both use never-treated controls and the same
+base period</strong> ($g-1$). Under those conditions the two are algebraically the
+same clean comparison, differing only in the software's variance estimator.
+On this panel the equality is exact: SA's overall ATT and CS's simple
+aggregation both return 1.6606 (difference 1e-11), and the two event-study
+paths are identical at every $e$. The standard errors differ (SA 0.10, CS
+0.25) because they estimate the control-group sampling variance differently.</p>
+<h2 id="borusyak-jaravel-and-spiess-2024-imputation">Borusyak, Jaravel and Spiess (2024): imputation</h2>
+<p>The imputation estimator is the most efficient of the four under parallel
+trends, and the most transparent. Three steps:</p>
+<ol>
+<li>Fit the two-way fixed-effects model $Y_{it} = \alpha_i + \lambda_t +
+   \varepsilon_{it}$ on <strong>untreated cells only</strong> (all not-yet-treated and
+   never-treated observations, including pre-periods of treated units).</li>
+<li>Impute the untreated potential outcome $\hat Y_{it}(0) = \hat\alpha_i +
+   \hat\lambda_t$ for every treated cell.</li>
+<li>The estimated effect is $\hat Y_{it} - \hat Y_{it}(0)$; average with
+   whatever weights define your target (<code>horizon = TRUE</code> gives the event
+   study).</li>
+</ol>
+<p>Because step 1 uses <em>every</em> untreated cell to pin down the fixed effects, the
+imputed counterfactual is far lower variance than a CS 2x2 that leans on a
+6-city never-treated group. Under parallel trends and homoskedasticity BJS
+show this estimator is efficient (it attains the semiparametric variance
+bound). On this panel the payoff is stark: BJS returns 1.406 against a true
+simple ATT of 1.407, with a standard error of 0.033, roughly one-seventh of
+CS's 0.25. The framing is the mirror image of Module 1's forbidden
+comparison: never extrapolate a treated cell's counterfactual from other
+treated cells, only from untreated ones.</p>
+<p>The cost is the flip side of the efficiency: imputation leans hard on the
+functional form of the untreated model. If parallel trends is shaky, the
+imputed $\hat Y(0)$ inherits the misspecification with no propensity-model
+insurance. That is why the doubly-robust CS estimator and imputation are
+complements, not substitutes.</p>
+<h2 id="de-chaisemartin-and-dhaultfoeuille-2020-switchers">de Chaisemartin and D'Haultfoeuille (2020): switchers</h2>
+<p>dCDH attack the problem one <em>switch</em> at a time. Their $\text{DID}_M$ estimator
+averages, over every period $t$ where some unit changes treatment status, the
+difference between the outcome change of the <strong>switchers</strong> and the outcome
+change of units whose treatment is <strong>stable</strong> across $t-1, t$. In our
+no-exit staggered design the only switchers are units turning on at their
+adoption date, and the stable comparison group is the not-yet-treated (plus
+never-treated). The instantaneous estimator is</p>
+<p>$$\widehat{\text{DID}}<em t="t">M = \sum</em> \frac{N_t^{sw}}{\sum_s N_s^{sw}}
+\left[\overline{\Delta Y}^{\,sw}_t - \overline{\Delta Y}^{\,stable\,0}_t\right],$$</p>
+<p>the switcher-count-weighted average of "switchers' first difference minus
+stayers' first difference" at each switch time. It targets the average
+<em>instantaneous</em> (event-time-zero) effect. On the <code>dynamic</code> scenario, whose
+switch-time effect is 0.4 by construction, the hand-coded estimator returns
+0.43, within sampling noise. The <code>DIDmultiplegt</code> package computes the full
+dynamic version and, critically, a <strong>negative-weights diagnostic</strong>: it reports
+how much weight a TWFE specification places on cohort-time cells with the
+wrong sign, the quantity that lets TWFE flip a uniformly positive effect
+negative (Module 1's sign-reversal demonstration).</p>
+<h2 id="choosing-among-the-four">Choosing among the four</h2>
+<table>
+<thead>
+<tr>
+<th>Estimator</th>
+<th>Package</th>
+<th>Reach for it when</th>
+<th>Watch out for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Callaway-Sant'Anna</td>
+<td><code>did</code></td>
+<td>you want group-time ATTs and flexible aggregation with DR robustness</td>
+<td>high variance with a small never-treated group</td>
+</tr>
+<tr>
+<td>Sun-Abraham</td>
+<td><code>fixest</code></td>
+<td>you live in a regression workflow and want a clean event study</td>
+<td>equals CS, so no robustness gain over it</td>
+</tr>
+<tr>
+<td>Borusyak et al.</td>
+<td><code>didimputation</code></td>
+<td>parallel trends is credible and you want efficiency</td>
+<td>leans on the untreated model; no DR insurance</td>
+</tr>
+<tr>
+<td>dCDH</td>
+<td><code>DIDmultiplegt</code></td>
+<td>treatment turns on and off, or you want the negative-weights audit</td>
+<td>instantaneous estimand differs from a full dynamic ATT</td>
+</tr>
+</tbody>
+</table>
+<p>In practice: pick one workhorse (CS or BJS), report its event study with a
+uniform band, and check robustness with a second estimator. If they agree,
+the staggering was handled; if they diverge, parallel trends or the control
+group is doing the work and you investigate before reporting.</p>
+<h2 id="references">References</h2>
+<ul>
+<li>Callaway, B. and Sant'Anna, P. (2021). Difference-in-differences with
+  multiple time periods. <em>Journal of Econometrics</em>, 225(2), 200-230.</li>
+<li>Sun, L. and Abraham, S. (2021). Estimating dynamic treatment effects in
+  event studies with heterogeneous treatment effects. <em>Journal of
+  Econometrics</em>, 225(2), 175-199.</li>
+<li>Borusyak, K., Jaravel, X. and Spiess, J. (2024). Revisiting event-study
+  designs: robust and efficient estimation. <em>Review of Economic Studies</em>,
+  91(6), 3253-3285.</li>
+<li>de Chaisemartin, C. and D'Haultfoeuille, X. (2020). Two-way fixed effects
+  estimators with heterogeneous treatment effects. <em>American Economic
+  Review</em>, 110(9), 2964-2996.</li>
+<li>Sant'Anna, P. and Zhao, J. (2020). Doubly robust difference-in-differences
+  estimators. <em>Journal of Econometrics</em>, 219(1), 101-122.</li>
+<li>Roth, J., Sant'Anna, P., Bilinski, A. and Poe, J. (2023). What's trending in
+  difference-in-differences? <em>Journal of Econometrics</em>, 235(2), 2218-2244.</li>
+</ul>
+</body>
+</html>

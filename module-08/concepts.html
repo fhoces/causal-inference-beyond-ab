@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Module 8: Matrix Completion — Concepts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="module-8-matrix-completion-and-the-modern-panel-toolbox">Module 8: Matrix Completion and the Modern Panel Toolbox</h1>
+<p>The course closes where panel causal inference is heading: treat the whole
+problem as missing data. Athey, Bayati, Doudchenko, Imbens and Khosravi
+(2021) show that TWFE (Module 1), the heterogeneity-robust DiD estimators
+(Module 2), synthetic control (Module 4) and synthetic DiD (Module 5) are
+all, underneath, rules for filling in a matrix of untreated potential
+outcomes. Matrix completion (MC-NNM) is the member of that family that
+imposes the least structure: it works on any missingness pattern, including
+the irregular ones none of the earlier estimators can handle.</p>
+<h2 id="the-imputation-view">The imputation view</h2>
+<p>Every panel causal problem has a matrix of potential outcomes under
+control, $Y_{it}(0)$, for units $i = 1, \dots, N$ and periods
+$t = 1, \dots, T$. You observe $Y_{it}(0)$ for control cells; for treated
+cells it is missing, not caused by treatment, simply unobserved. Once you
+have an estimate $\hat Y_{it}(0)$ for every missing cell, the ATT falls out
+directly:</p>
+<p>$$\widehat{ATT} = \frac{1}{|\mathcal{M}|}\sum_{(i,t) \in \mathcal{M}}
+\big(Y_{it} - \hat Y_{it}(0)\big)$$</p>
+<p>where $\mathcal{M}$ is the set of treated (missing) cells. Every course
+estimator differs only in <em>how</em> it fills those cells:</p>
+<ul>
+<li><strong>TWFE / DiD</strong> fills a missing cell with $\hat\alpha_i + \hat\beta_t$: a
+  pure two-way fixed-effects imputation, no interactive structure at all.</li>
+<li><strong>Synthetic control</strong> fills a treated unit's missing cells with a convex
+  combination of donor units' outcomes at the same period.</li>
+<li><strong>Synthetic DiD</strong> fills them with a weighted two-way FE fit, unit weights
+  matching pre-period shape, time weights matching post-period relevance.</li>
+<li><strong><code>gsynth</code> / interactive fixed effects (IFE)</strong> fills them with a
+  factor model of fixed rank $r$, chosen by cross-validation.</li>
+<li><strong>Matrix completion (MC-NNM)</strong> fills them with a low-rank matrix whose
+  effective rank is chosen continuously, by nuclear-norm shrinkage.</li>
+</ul>
+<p>The missingness pattern itself varies by application: one unit going
+missing in a block at the end of the panel (single-market policy change),
+many units in one simultaneous block (a coordinated rollout), staggered
+absorbing missingness (a rollout ops schedule city by city), or genuinely
+irregular missingness (data gaps plus treatment, or treatment on-again
+off-again). Only matrix completion handles the last case; the others
+require some form of block or absorbing structure.</p>
+<h2 id="the-mc-nnm-estimator">The MC-NNM estimator</h2>
+<p>Let $\mathcal{O}$ denote the observed (untreated) cells. The estimator
+solves for a low-rank matrix $L$ and unpenalized two-way fixed effects
+jointly:</p>
+<p>$$\min_{L,\, \alpha,\, \beta}\; \frac{1}{|\mathcal{O}|}
+\sum_{(i,t) \in \mathcal{O}} \big(Y_{it} - L_{it} - \alpha_i - \beta_t\big)^2
++ \lambda \lVert L \rVert_*$$</p>
+<p>Two design choices matter as much as the objective itself:</p>
+<ol>
+<li><strong>The fixed effects are not penalized.</strong> $\alpha_i$ and $\beta_t$ absorb
+   level and trend structure every unit or every period shares. Leaving
+   them inside $L$ would force the nuclear-norm penalty to pay for that
+   shared structure, wasting rank budget that should go to the genuinely
+   interactive (unit-by-time) part of the residual.</li>
+<li><strong>$\lambda$ is chosen by cross-validation on the observed cells only.</strong>
+   Hide a random subset of <em>observed</em> control cells, refit, and pick the
+   $\lambda$ that best predicts the held-out subset. The treated cells are
+   never part of this CV loop, which is exactly why the estimator can
+   under-extrapolate into them (see below).</li>
+</ol>
+<p>Given $\hat L, \hat\alpha, \hat\beta$, the counterfactual for every missing
+cell is $\hat Y_{it}(0) = \hat L_{it} + \hat\alpha_i + \hat\beta_t$, and the
+ATT is the average gap over the treated cells.</p>
+<h2 id="why-the-nuclear-norm">Why the nuclear norm</h2>
+<p>Minimizing the rank of $L$ directly is combinatorial and NP-hard in
+general. The nuclear norm</p>
+<p>$$\lVert L \rVert_* = \sum_k \sigma_k(L)$$</p>
+<p>(the sum of $L$'s singular values) is its convex relaxation, playing the
+same role for a matrix that the lasso's $\ell_1$ penalty plays for a
+vector: it shrinks every singular value toward zero and sets the smallest
+ones exactly to zero, choosing the <em>effective</em> rank of $L$ continuously
+rather than fixing it in advance.</p>
+<h3 id="the-soft-impute-algorithm">The soft-impute algorithm</h3>
+<p>Mazumder, Hastie and Tibshirani (2010) give a simple fixed-point algorithm.
+Starting from $L = 0$: fill the missing cells of the (FE-residualized)
+outcome matrix with the current $L$, take an SVD of the filled matrix,
+soft-threshold every singular value by $\lambda$ (subtract $\lambda$, floor
+at zero), reassemble $L$ from the thresholded SVD, and repeat to a fixed
+point. Each step is an exact solution to a proximal problem,
+$\min_L \tfrac12 \lVert Z - L \rVert_F^2 + \lambda \lVert L \rVert_*$, so the
+iteration is a majorize-minimize scheme that provably converges to the
+minimizer of the nuclear-norm objective over the observed cells. The
+exercise hand-codes this loop and checks it against <code>gsynth(estimator =
+"mc")</code>.</p>
+<h2 id="one-family-sc-sdid-gsynth-mc-nnm">One family: SC, SDID, <code>gsynth</code>, MC-NNM</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Imputation model</th>
+<th>Regularization</th>
+<th>Pattern it needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SC (Module 4)</td>
+<td>convex combination of donors matching pre-period levels</td>
+<td>simplex constraint, no intercept</td>
+<td>block, one or a few treated units</td>
+</tr>
+<tr>
+<td>SDID (Module 5)</td>
+<td>weighted two-way FE regression</td>
+<td>simplex-plus-ridge weights, local parallel trends</td>
+<td>block</td>
+</tr>
+<tr>
+<td><code>gsynth</code> / IFE</td>
+<td>factor model, rank fixed by CV, loadings by least squares</td>
+<td>none beyond the hard rank cutoff</td>
+<td>staggered adoption is fine; needs enough pre-periods per treated unit</td>
+</tr>
+<tr>
+<td>MC-NNM (this module)</td>
+<td>low-rank matrix plus two-way FE</td>
+<td>continuous nuclear-norm shrinkage</td>
+<td>any pattern, including irregular missingness</td>
+</tr>
+</tbody>
+</table>
+<p>Athey et al.'s own framing is useful for interviews: SC-style estimators
+run "horizontal" regressions, exploiting similarity across <em>units</em> at a
+given time; DiD-style estimators run "vertical" regressions, exploiting
+similarity across <em>time</em> for a given unit. Matrix completion is the member
+of the family that uses both directions simultaneously, through the
+two-way fixed effects plus a shared low-rank residual structure.</p>
+<h2 id="what-the-demos-show">What the demos show</h2>
+<p><strong>Demo A (a staggered launch with selection on growth).</strong> 60 cities, 40
+weeks, two latent factors (a mildly trending, persistent market factor and
+a seasonal factor) with city-specific loadings. Ops launch the
+fastest-growing (highest-loading) cities first, so launch timing correlates
+with the trending factor by construction; parallel trends is false. 25
+treated cities across 12 distinct launch weeks, 35 never-treated. True
+effect 2.0.</p>
+<table>
+<thead>
+<tr>
+<th>Estimator</th>
+<th>Estimate</th>
+<th>Error vs truth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TWFE</td>
+<td>3.49</td>
+<td>+1.49</td>
+</tr>
+<tr>
+<td>Callaway-Sant'Anna</td>
+<td>3.15</td>
+<td>+1.15</td>
+</tr>
+<tr>
+<td><code>gsynth</code> (IFE, rank 2 by CV)</td>
+<td>2.07</td>
+<td>+0.07</td>
+</tr>
+<tr>
+<td><code>gsynth</code> (MC-NNM)</td>
+<td>3.66</td>
+<td>+1.66</td>
+</tr>
+<tr>
+<td>soft-impute (hand-coded)</td>
+<td>3.67</td>
+<td>+1.67</td>
+</tr>
+</tbody>
+</table>
+<p>TWFE and CS both inherit the launch-timing selection bias. Fixed-rank IFE,
+because the true factor structure is exactly rank 2 and CV finds it,
+recovers the truth almost exactly. Matrix completion, whether via
+<code>gsynth</code>'s own <code>mc</code> estimator or the hand-coded soft-impute (the two agree
+to within 0.01), lands close to the TWFE answer, not the truth.</p>
+<p><strong>Why.</strong> Cross-validation for $\lambda$ only ever sees observed control
+cells; it never sees the treated corner it is asked to predict. Shrinking
+singular values flattens exactly the growth-factor divergence that needs
+to be extrapolated into that corner. A noiseless version of the same DGP
+(zero noise, no treatment effect, so any imputation error is pure
+extrapolation bias) makes the point starkly: FE-only imputation has corner
+RMSE about 1.96 against a corner scale (SD) of about 6.3; nuclear-norm
+shrinkage at several values of $\lambda$ gets RMSE 1.85-1.93, barely
+better than ignoring the factor structure entirely; a rank-2 <code>gsynth</code>/IFE
+fit recovers the corner to machine precision (RMSE 0). This is structural,
+not a tuning failure: shrinkage is a conservative extrapolation policy, and
+the corner is precisely where it is most conservative.</p>
+<p><strong>Demo B (the placebo-imputation tournament).</strong> Athey et al.'s own
+validation recipe, applied here to a 40-city, no-treatment version of the
+same factor panel (noise floor 0.5). Hide cells you actually observe under
+four patterns, impute with each method, score RMSE against ground truth
+you happen to know.</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>FE only</th>
+<th><code>gsynth</code> IFE</th>
+<th><code>gsynth</code> MC</th>
+<th>soft-impute</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one unit, block</td>
+<td>2.22</td>
+<td>0.41</td>
+<td>0.88</td>
+<td>1.18</td>
+</tr>
+<tr>
+<td>10 units, block</td>
+<td>2.19</td>
+<td>0.55</td>
+<td>1.82</td>
+<td>1.81</td>
+</tr>
+<tr>
+<td>20 units, staggered</td>
+<td>2.25</td>
+<td>0.97</td>
+<td>2.12</td>
+<td>2.16</td>
+</tr>
+<tr>
+<td>15% random holes</td>
+<td>1.03</td>
+<td>cannot run</td>
+<td>cannot run</td>
+<td>0.59</td>
+</tr>
+</tbody>
+</table>
+<p>Two robust conclusions. First, FE-only imputation (exactly the
+Borusyak-Jaravel-Spiess counterfactual of Module 2) is dominated by every
+factor-aware method on every pattern: parallel-trends imputation pays for
+ignoring the factor structure everywhere, not just under selection. Second,
+fixed-rank IFE wins whenever it can run (it exploits the exact rank), but
+<code>gsynth</code> requires an <em>absorbing</em> treatment pattern (once missing, always
+missing within a unit), so it cannot even attempt the random-holes case.
+Matrix completion is the only method in the table that runs on every
+pattern, and on the one pattern that rules out everything else, it clearly
+beats FE-only imputation.</p>
+<h2 id="shrinkage-is-an-extrapolation-policy-you-choose">Shrinkage is an extrapolation policy you choose</h2>
+<p>The two demos together are the module's central lesson. Regularization
+choice is not a technical footnote, it is a bet about how far you are
+willing to extrapolate:</p>
+<ul>
+<li><strong>Fixed-rank factor estimation (<code>gsynth</code>/IFE)</strong> extrapolates aggressively
+  once it commits to a rank: no shrinkage inside that rank, so a
+  well-specified low-rank structure is recovered almost exactly, even deep
+  into a treated corner far from any observed cell.</li>
+<li><strong>Nuclear-norm shrinkage (MC-NNM)</strong> extrapolates conservatively: it
+  never fully trusts a factor structure it cannot validate on observed
+  data, so it degrades gracefully when the rank is unknown, the pattern is
+  irregular, or the panel is thin, at the cost of under-correcting a
+  confound that a correctly-specified fixed-rank model would catch.</li>
+</ul>
+<p>Neither dominates. The practical rule: a strongly trending confound plus a
+long extrapolation horizon, with enough pre-periods per treated unit,
+favors <code>gsynth</code>/IFE. An irregular missingness pattern, a panel with real
+data gaps, or genuine uncertainty about the rank favors matrix completion.
+Either way, validate with Demo B's recipe on your own panel before trusting
+the answer: hide cells you actually observe, impute, and see which method's
+errors you can live with.</p>
+<h2 id="staggered-adoption-across-the-toolbox">Staggered adoption across the toolbox</h2>
+<p>How the block-treatment tools of Modules 4-5 extend, or fail to, under
+staggered timing:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>What runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One block, all units treated together</td>
+<td>SC, SDID, CS, BJS, <code>gsynth</code>, MC-NNM</td>
+</tr>
+<tr>
+<td>Staggered, absorbing</td>
+<td>CS, BJS, <code>gsynth</code>/IFE, MC-NNM (not plain SC or SDID, which need a single block)</td>
+</tr>
+<tr>
+<td>Irregular or genuinely missing cells</td>
+<td>MC-NNM only</td>
+</tr>
+</tbody>
+</table>
+<p>The imputation view unifies the entire course. Borusyak-Jaravel-Spiess
+imputation (Module 2) is <em>exactly</em> the FE-only imputer in the tournament
+above, MC-NNM with $L$ constrained to zero: no low-rank term, pure additive
+fixed effects. <code>gsynth</code> is MC-NNM with a hard, CV-selected rank in place of
+continuous nuclear-norm shrinkage. Every difference-in-differences
+estimator in this course sits on the same regularization dial, from "no
+low-rank term at all" (BJS) through "hard-cutoff rank" (<code>gsynth</code>) to
+"continuous shrinkage" (MC-NNM).</p>
+<h2 id="when-to-reach-for-matrix-completion">When to reach for matrix completion</h2>
+<ul>
+<li><strong>Irregular adoption or genuinely missing panel cells.</strong> <code>gsynth</code>, SC,
+  and SDID all require a structured, absorbing pattern. MC-NNM is the only
+  estimator here that runs on arbitrary missingness, and Demo B shows it
+  wins there.</li>
+<li><strong>You are not confident in the rank.</strong> Continuous shrinkage degrades
+  gracefully if the true factor count is misjudged; a hard-rank model can
+  be badly mis-specified with the wrong $r$.</li>
+<li><strong>Many treated units, a thin control pool.</strong> This is the paper's own
+  motivating case (a hard-rank factor model is harder to estimate with few
+  controls), but treat it as a reason to <em>test</em>, not a guarantee: in a
+  single check on the tournament DGP with 35 of 40 units treated,
+  fixed-rank IFE still beat soft-impute (RMSE 0.72 vs 1.15). Run Demo B's
+  recipe on your own panel rather than assuming.</li>
+</ul>
+<p><strong>Caveat.</strong> A strongly trending confound plus a long extrapolation horizon,
+with enough pre-periods per treated unit, favors <code>gsynth</code>/IFE (Demo A).
+Nuclear-norm shrinkage is the safer default when the pattern rules out
+fixed-rank methods entirely, or when you are unsure the rank is right.
+Always validate with the placebo-imputation exercise before trusting either
+estimator on a new panel.</p>
+<h2 id="long-run-outcomes-from-short-panels-the-surrogate-index">Long-run outcomes from short panels: the surrogate index</h2>
+<p>A different problem entirely, but one that shares the "the data you have
+is not the data you need" theme: the experimental panel runs 8 weeks, but
+the decision depends on 12-month retention. Waiting a year to evaluate
+every launch is not viable.</p>
+<p>Athey, Chetty, Imbens and Kang (2019) combine two data sources:</p>
+<ol>
+<li><strong>The experiment itself</strong>, which records treatment and short-run
+   surrogates $S$ (trips, active days, cancellation rate) but not the
+   long-run outcome $Y_{\text{long}}$.</li>
+<li><strong>Historical data</strong>, from units observed for the full horizon, linking
+   those same surrogates to $Y_{\text{long}}$.</li>
+</ol>
+<p>Fit the surrogate index $\hat h(S, X) = \hat E[Y_{\text{long}} \mid S, X]$
+on the historical sample, then use $\hat h(S_i, X_i)$ as the outcome inside
+the experiment. The resulting treatment-effect estimate targets the
+long-run effect without ever observing the long-run panel for the
+experimental units.</p>
+<p><strong>Assumptions.</strong> Surrogacy: treatment affects the long-run outcome only
+through the observed surrogates, $Y_i(\text{long}) \perp W_i \mid S_i,
+X_i$. Comparability: the surrogate-to-long-run relationship estimated
+historically also holds in the experimental sample. Overlap: the
+historical sample covers the surrogate values the experiment actually
+produces. A useful bonus when the assumptions hold: the index also reduces
+noise, since it averages away idiosyncratic long-run variation the
+surrogates do not explain, so the experiment's effective sample size for
+the long-run question is larger than running the full panel would give
+directly.</p>
+<p><strong>Failure modes.</strong> A treatment channel that bypasses the surrogates
+entirely, for example a fee change that leaves short-run usage flat but
+slowly erodes trust and long-run retention, breaks surrogacy silently: the
+index would report no effect while the true long-run effect is nonzero.
+Distribution shift between the historical and experimental samples (a
+changed product, a changed market) breaks comparability. Neither failure
+is directly testable from the experiment alone; both need domain judgment
+about the mechanism connecting treatment to the long-run outcome.</p>
+<h2 id="choosing-the-method-the-courses-capstone">Choosing the method: the course's capstone</h2>
+<ul>
+<li><strong>Can you randomize? Then randomize.</strong> Everything below answers "what do
+  you do when the experiment you wanted is not available": a
+  platform-wide launch, one treated market, a legal or PR constraint, or a
+  retroactive question.</li>
+<li><strong>Staggered rollout with clean never- or late-treated controls</strong> &rarr;
+  Callaway-Sant'Anna or BJS imputation (Module 2), audited with a
+  Goodman-Bacon decomposition (Module 1) and stress-tested with HonestDiD
+  sensitivity (Module 3).</li>
+<li><strong>One treated market with a good donor pool</strong> &rarr; synthetic control,
+  augmented SC, or synthetic DiD (Modules 4-5), with placebo or conformal
+  inference.</li>
+<li><strong>Irregular adoption, holes in the panel, or many treated units</strong> &rarr;
+  matrix completion or <code>gsynth</code> (this module), validated by hiding observed
+  cells before trusting either.</li>
+<li><strong>Need to know who benefits</strong> &rarr; causal forest (Module 6), with
+  calibration, best-linear-projection, and RATE diagnostics before any
+  subgroup claim.</li>
+<li><strong>Need to decide who gets the treatment</strong> &rarr; policy tree with
+  cross-fitted off-policy evaluation (Module 7).</li>
+<li><strong>Long-run outcome, short panel</strong> &rarr; the surrogate index, layered on
+  top of whichever design above supplies the experiment or
+  quasi-experiment.</li>
+</ul>
+<h2 id="practitioner-guidance">Practitioner guidance</h2>
+<ul>
+<li>Start from the pattern, not the method. Draw the missingness pattern
+  first (one block, many blocks, staggered, irregular); it rules out most
+  of the toolbox before you touch an estimator.</li>
+<li>Cross-validate $\lambda$ (or $r$, for <code>gsynth</code>) only against cells you
+  actually observe, never against treated cells, and report sensitivity to
+  the tuning choice rather than a single point.</li>
+<li>Validate any panel estimator, before trusting its ATT, by hiding cells
+  you already know and scoring the imputation. This is cheap, requires no
+  new data, and directly answers whether the estimator's extrapolation
+  policy fits your setting.</li>
+<li>Treat "irregular pattern" and "thin control pool" as two different
+  reasons to consider matrix completion, and check the second empirically:
+  it does not always favor MC over a fixed-rank alternative.</li>
+<li>For long-horizon outcomes, reach for the surrogate index only when you
+  can defend surrogacy and comparability qualitatively; neither is testable
+  from the experiment alone.</li>
+</ul>
+<h2 id="references">References</h2>
+<ul>
+<li>Athey, S., Bayati, M., Doudchenko, N., Imbens, G. and Khosravi, K.
+  (2021). Matrix completion methods for causal panel data models. <em>Journal
+  of the American Statistical Association</em>, 116(536), 1716-1730.</li>
+<li>Athey, S., Chetty, R., Imbens, G. W. and Kang, H. (2019). The surrogate
+  index: combining short-term proxies to estimate long-term treatment
+  effects more rapidly and precisely. NBER Working Paper 26463.</li>
+<li>Xu, Y. (2017). Generalized synthetic control method: causal inference
+  with interactive fixed effects models. <em>Political Analysis</em>, 25(1),
+  57-76.</li>
+<li>Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W. and Wager,
+  S. (2021). Synthetic difference-in-differences. <em>American Economic
+  Review</em>, 111(12), 4088-4118.</li>
+<li>Borusyak, K., Jaravel, X. and Spiess, J. (2024). Revisiting event-study
+  designs: robust and efficient estimation. <em>Review of Economic Studies</em>.</li>
+<li>Mazumder, R., Hastie, T. and Tibshirani, R. (2010). Spectral
+  regularization algorithms for learning large incomplete matrices.
+  <em>Journal of Machine Learning Research</em>, 11, 2287-2322.</li>
+<li>Rambachan, A. and Roth, J. (2023). A more credible approach to
+  parallel trends. <em>Review of Economic Studies</em>, 90(5), 2555-2591.</li>
+<li>Liu, L., Wang, Y. and Xu, Y. (2024). A practical guide to
+  counterfactual estimators for causal inference with time-series
+  cross-sectional data. <em>American Journal of Political Science</em>, 68(1),
+  160-176.</li>
+</ul>
+</body>
+</html>

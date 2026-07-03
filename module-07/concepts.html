@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Module 7: Policy Learning — Concepts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="module-7-policy-learning">Module 7: Policy Learning</h1>
+<p>From HTE estimates to deployment rules. Module 6 gave us $\hat\tau(x)$, a
+calibrated map from driver features to conditional treatment effects. That
+answers "to whom is the push notification most effective?" It does <em>not</em> tell
+us what to actually do. This module closes the loop: turn heterogeneous
+effects into a deployable rule $\pi: X \to {0, 1}$, learn it with the
+regret guarantees of Athey and Wager (2021), and evaluate a candidate policy
+honestly with off-policy value estimates.</p>
+<h2 id="the-policy-learning-problem">The policy learning problem</h2>
+<p>A policy is a map $\pi: X \to {0, 1}$ assigning a treatment decision to
+every covariate profile. Its <strong>value</strong> is the expected outcome if we deploy
+it to the population:</p>
+<p>$$V(\pi) = E\big[ Y(\pi(X)) \big] = E\big[ Y(0) + \pi(X)\,\tau(X) \big].$$</p>
+<p>The second equality uses $Y(\pi(X)) = Y(0) + \pi(X)(Y(1) - Y(0))$ and the
+tower property. We want $\pi^\star = \arg\max_{\pi \in \Pi} V(\pi)$ over a
+restricted class $\Pi$ (shallow trees, linear-index rules, monotone rules).
+The unconstrained optimum is the pointwise rule
+$\pi^\star_{\text{full}}(x) = \mathbb{1}{\tau(x) &gt; 0}$, or with a per-unit
+cost $c$, $\pi^\star_{\text{full}}(x) = \mathbb{1}{\tau(x) &gt; c}$. Restricting
+to $\Pi$ trades a little value for interpretability, fairness, and
+implementability.</p>
+<h3 id="welfare-maximization-is-not-welfare-estimation">Welfare maximization is not welfare estimation</h3>
+<p>This is the single most important idea in the module. Estimating $\tau(x)$
+well (the Module 6 objective) and choosing a good policy are <em>different</em>
+objectives.</p>
+<ul>
+<li>A CATE estimator is judged by its error in <strong>levels</strong>: mean-squared error
+  $E[(\hat\tau(x) - \tau(x))^2]$, pointwise coverage.</li>
+<li>A policy is judged only by whether it gets the <strong>sign of $\tau(x) - c$
+  right</strong> where it matters, weighted by $|\tau(x) - c|$. A rule needs the
+  <em>ranking</em> around the cost threshold, not unbiased levels.</li>
+</ul>
+<p>Consequences:</p>
+<ol>
+<li>A biased $\hat\tau$ that preserves the ordering of units relative to $c$
+   yields the optimal policy. An unbiased-but-noisy $\hat\tau$ can yield a
+   worse policy.</li>
+<li>Regions where $\tau(x)$ is far from $c$ are easy: any reasonable estimate
+   gets the decision right. All the action is near the decision boundary
+   $\tau(x) = c$, exactly where CATE estimation is hardest and least
+   consequential for MSE.</li>
+<li>You should optimize the welfare objective directly, not a plug-in of a
+   CATE fit. That is empirical welfare maximization.</li>
+</ol>
+<h2 id="doubly-robust-scores">Doubly-robust scores</h2>
+<p>To optimize welfare from a finite RCT (or observational data) we need an
+unbiased, low-variance estimate of $V(\pi)$ for any $\pi$. The
+augmented-inverse-propensity (AIPW), or doubly-robust, score does this. For
+each unit build a per-arm score that is an unbiased estimate of the potential
+outcome under that arm:</p>
+<p>$$\Gamma_i(w) = \hat\mu_w(X_i) + \frac{\mathbb{1}{W_i = w}}{\hat e_w(X_i)}
+\big( Y_i - \hat\mu_w(X_i) \big), \qquad w \in {0, 1},$$</p>
+<p>where $\hat\mu_w(x) = \hat E[Y \mid X = x, W = w]$ is an outcome model and
+$\hat e_w(x) = \hat P(W = w \mid X = x)$ is the propensity. In our RCT the
+propensity is known: $\hat e_1 = 0.5$. The doubly-robust name: $\Gamma_i(w)$
+is unbiased for $E[Y(w) \mid X_i]$ if <em>either</em> $\hat\mu_w$ <em>or</em> $\hat e_w$ is
+correct. <code>grf</code> builds these from a causal forest: with the forest's marginal
+outcome model $\hat m(x)$ and effect $\hat\tau(x)$,
+$\hat\mu_1 = \hat m + (1 - \hat e)\hat\tau$ and
+$\hat\mu_0 = \hat m - \hat e\hat\tau$;
+<code>policytree::double_robust_scores(forest)</code> returns the $n \times 2$ matrix
+with columns <code>control</code> and <code>treated</code>.</p>
+<h3 id="why-plug-in-rules-are-inferior">Why plug-in rules are inferior</h3>
+<p>The tempting shortcut is the plug-in rule
+$\hat\pi(x) = \mathbb{1}{\hat\tau(x) &gt; c}$. It is dominated by DR-score
+learning for two reasons:</p>
+<ol>
+<li><strong>Propensity / regularization bias.</strong> $\hat\tau$ from a forest is a
+   regularized, biased estimate. The plug-in inherits that bias directly at
+   the decision boundary. The DR score corrects the outcome model with the
+   residual term, so first-order errors in $\hat\mu$ do not propagate into the
+   value estimate.</li>
+<li><strong>It optimizes the wrong loss.</strong> The forest split criterion targets CATE
+   heterogeneity (MSE-like), not welfare. Learning the policy on the DR
+   scores optimizes value directly, and inherits Neyman-orthogonality: the
+   welfare objective is insensitive to first-order nuisance error.</li>
+</ol>
+<h2 id="empirical-welfare-maximization-and-regret">Empirical welfare maximization and regret</h2>
+<p>Athey and Wager (2021) define the estimated policy as the empirical welfare
+maximizer over the DR scores:</p>
+<p>$$\hat\pi = \arg\max_{\pi \in \Pi} \frac{1}{n} \sum_{i=1}^n
+\Big[ \Gamma_i(1)\,\pi(X_i) + \Gamma_i(0)\,(1 - \pi(X_i)) \Big].$$</p>
+<p>Performance is measured by <strong>regret</strong> against the best rule in the class:</p>
+<p>$$R(\hat\pi) = V(\pi^\star_\Pi) - V(\hat\pi), \qquad
+\pi^\star_\Pi = \arg\max_{\pi \in \Pi} V(\pi).$$</p>
+<p>The main theorem: with doubly-robust scores and a class $\Pi$ of bounded
+Vapnik-Chervonenkis (VC) dimension,</p>
+<p>$$R(\hat\pi) = O_p!\left( \sqrt{\frac{\text{VC}(\Pi)}{n}} \right).$$</p>
+<p>Two features of this bound deserve emphasis.</p>
+<ul>
+<li><strong>Restricting $\Pi$ is a feature, not a bug.</strong> The regret is against the
+  best rule <em>in the class</em>, and the rate improves as $\text{VC}(\Pi)$ shrinks.
+  A depth-2 tree has small VC dimension, so it converges fast; it is also
+  interpretable, auditable, and implementable in a rules engine. You choose
+  $\Pi$ for deployment constraints and get a tighter bound for free.</li>
+<li><strong>Utilitarian, not pointwise.</strong> The guarantee is on average welfare, not on
+  getting every unit's decision right. Pointwise-optimal rules are impossible
+  from finite data (near $\tau(x) = c$ you cannot resolve the sign), but the
+  units you misclassify there are exactly the ones where $|\tau(x) - c|$ is
+  small, so they cost little welfare. Regret is the right yardstick precisely
+  because it downweights the unavoidable errors.</li>
+</ul>
+<h2 id="policytree-in-practice">policytree in practice</h2>
+<p><code>policytree::policy_tree(X, Gamma, depth = 2)</code> performs an <strong>exact</strong> search
+over all depth-$L$ axis-aligned trees, maximizing the summed DR reward. This
+is not greedy CART: it globally optimizes the welfare objective. The cost:
+exact search is combinatorial in the number of covariates and split points,
+so runtime grows fast with depth. Depth 2 is the practical default (four
+leaves, three splits); depth 3 is often too slow on wide data and rarely buys
+enough welfare to justify the loss of interpretability. <code>predict(tree, X)</code>
+returns actions in ${1, 2}$ where 1 = control and 2 = treat.</p>
+<p>Reading a tree: each internal node is a covariate threshold, each leaf a
+treat / control decision. Because the tree is fit on the <em>welfare</em> objective,
+its splits identify the covariate regions where treating clears the cost, not
+where the CATE is merely large.</p>
+<h3 id="cost-aware-policies">Cost-aware policies</h3>
+<p>A per-push cost $c$ enters cleanly. The value of treating unit $i$ net of cost
+is $\Gamma_i(1) - c$, so subtract $c$ from the treated column of $\Gamma$
+before fitting:</p>
+<p>$$\Gamma_i^{\text{net}} = \big( \Gamma_i(0),\; \Gamma_i(1) - c \big),
+\qquad \pi(x) = \mathbb{1}{\tau(x) &gt; c}.$$</p>
+<p>Raising $c$ makes the treat leaves shrink: the tree only treats regions whose
+effect clears the higher bar. In the application, $c = 0.6$ (about 0.6 weekly
+trips of margin per push).</p>
+<h2 id="off-policy-evaluation">Off-policy evaluation</h2>
+<p>Given a candidate policy $\pi$ (learned however), estimate its value from RCT
+data with the doubly-robust value estimator:</p>
+<p>$$\hat V(\pi) = \frac{1}{n} \sum_{i=1}^n
+\Big[ \Gamma_i(0) + \pi(X_i)\big(\Gamma_i(1) - \Gamma_i(0)\big) \Big],$$</p>
+<p>net of cost by using $\Gamma_i(1) - c$ in place of $\Gamma_i(1)$. This is an
+average of i.i.d. terms, so the standard error follows from the
+influence-function form: $\widehat{\text{SE}} = \hat\sigma_\psi / \sqrt{n}$
+where $\psi_i$ is the summand and $\hat\sigma_\psi$ its sample standard
+deviation.</p>
+<h3 id="the-naive-trap-and-cross-fitting">The naive trap and cross-fitting</h3>
+<p>If you evaluate a <em>learned</em> policy on the same data that trained it, $\hat
+V(\hat\pi)$ is optimistically biased: the policy has adapted to the noise in
+those scores. The fix is <strong>cross-fitting</strong> (or an honest split): the policy
+must never be evaluated on the data that trained it.</p>
+<p>$K$-fold cross-fit:</p>
+<ol>
+<li>Split into $K$ folds.</li>
+<li>For each fold $k$: fit the nuisances (forest, outcome model) on the other
+   $K - 1$ folds, learn $\hat\pi_{-k}$ on those folds, then compute DR scores
+   on fold $k$ from the <em>training-fold</em> nuisances and evaluate
+   $\hat\pi_{-k}$ on fold $k$.</li>
+<li>Pool the held-out contributions; the SE comes from the pooled influence
+   terms.</li>
+</ol>
+<p>Because each held-out unit is scored by a policy and nuisances that never saw
+it, the estimate is honest.</p>
+<h2 id="the-application">The application</h2>
+<p>Zone-notification push to 6000 drivers, randomized $W$ with propensity 0.5,
+outcome = weekly completed trips, cost $c = 0.6$ per push. Effect
+$\tau(x) = 1.5\,\text{density} - 0.02\,\text{tenure} +
+2.0\,\text{density}\times\text{peak_shr}$; <code>rating</code> is a pure nuisance
+covariate. The true optimal share treated ($\tau &gt; 0.6$) is about 57%.</p>
+<p>Learned depth-2 tree (net of cost) splits on tenure then density: newer
+drivers (tenure below about 28 months) are treated once density exceeds about
+0.27; veteran drivers are treated only in the densest markets (density above
+about 0.73). It treats roughly 53% of drivers. The interpretation matches the
+DGP: tenure lowers $\tau$, so veterans need a denser market to clear the cost.</p>
+<p>Honest off-policy values, as gains over treat-none, net of cost:</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Gain over treat-none</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>treat all</td>
+<td>0.26</td>
+<td>ignores heterogeneity, pays cost everywhere</td>
+</tr>
+<tr>
+<td>oracle ($\tau &gt; c$)</td>
+<td>0.40</td>
+<td>infeasible upper bound</td>
+</tr>
+<tr>
+<td>forest plug-in</td>
+<td>0.40</td>
+<td>$\hat\tau &gt; c$, unrestricted</td>
+</tr>
+<tr>
+<td>depth-2 policy tree</td>
+<td>0.41</td>
+<td>interpretable, three splits</td>
+</tr>
+</tbody>
+</table>
+<p>The tree is within noise of the oracle and beats treat-all by about 0.16 net
+of cost. The naive same-data tree value overstates the gain (about 0.45
+versus the honest 0.39 to 0.41): that gap is the optimism a cross-fit
+removes.</p>
+<h2 id="when-this-breaks">When this breaks</h2>
+<ol>
+<li><strong>Bad nuisances.</strong> DR corrects first-order error, not gross
+   misspecification. In observational data with poor overlap the propensity
+   blows up the score variance and the value estimate becomes useless. Trim or
+   check overlap first.</li>
+<li><strong>Evaluating on training data.</strong> The naive trap: always cross-fit or split.</li>
+<li><strong>Over-rich $\Pi$.</strong> A deep tree has high VC dimension, slow regret, and no
+   interpretability. Depth 2 is usually the right default.</li>
+<li><strong>Value near the boundary.</strong> If most of the population sits near
+   $\tau(x) = c$, no policy separates much value from treat-all, and the honest
+   gain is small with wide SEs. Report the SE, not just the point estimate.</li>
+</ol>
+<h2 id="references">References</h2>
+<ul>
+<li>Athey, S. and Wager, S. (2021). Policy learning with observational data.
+  <em>Econometrica</em>, 89(1), 133-161.</li>
+<li>Kitagawa, T. and Tetenov, A. (2018). Who should be treated? Empirical
+  welfare maximization methods for treatment choice. <em>Econometrica</em>, 86(2),
+  591-616.</li>
+<li>Zhou, Z., Athey, S. and Wager, S. (2023). Offline multi-action policy
+  learning: generalization and optimization. <em>Operations Research</em>, 71(1),
+  148-183.</li>
+<li>Wager, S. and Athey, S. (2018). Estimation and inference of heterogeneous
+  treatment effects using random forests. <em>JASA</em>, 113(523), 1228-1242.</li>
+<li>Athey, S., Tibshirani, J. and Wager, S. (2019). Generalized random forests.
+  <em>Annals of Statistics</em>, 47(2), 1148-1178.</li>
+</ul>
+</body>
+</html>

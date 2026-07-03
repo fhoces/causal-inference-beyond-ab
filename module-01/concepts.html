@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Module 1: TWFE Diagnosed — Concepts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="module-1-twfe-diagnosed">Module 1: TWFE Diagnosed</h1>
+<p>Goodman-Bacon and the zoo of 2x2s. The experimentation-refresher's Module 8
+showed <em>that</em> two-way fixed effects breaks under staggered adoption; this
+module shows <em>exactly how</em>, with the full decomposition, the weight
+formulas, and a hand-coded replication of <code>bacondecomp::bacon()</code>.</p>
+<h2 id="the-estimator-and-the-question-it-dodges">The estimator and the question it dodges</h2>
+<p>The two-way fixed effects (TWFE) regression is</p>
+<p>$$y_{it} = \alpha_i + \lambda_t + \beta^{DD} D_{it} + \varepsilon_{it}$$</p>
+<p>with unit effects $\alpha_i$, period effects $\lambda_t$, and a single
+treatment dummy $D_{it}$. In the canonical 2x2 (two groups, two periods,
+one adoption date) this <em>is</em> the difference-in-differences estimator and,
+under parallel trends, it is unbiased for the ATT.</p>
+<p>With <strong>staggered adoption</strong> (units switch on at different dates) the
+regression still returns one number. The question is which number. By
+Frisch-Waugh-Lovell,</p>
+<p>$$\hat\beta^{DD} = \frac{\widehat{Cov}(y_{it}, \tilde D_{it})}{\widehat{Var}(\tilde D_{it})}$$</p>
+<p>where $\tilde D_{it} = D_{it} - \bar D_i - \bar D_t + \bar{\bar D}$ is the
+double-demeaned treatment. Three facts follow directly:</p>
+<ol>
+<li>TWFE is a fixed linear combination of the outcome cells, so an exact
+   algebraic decomposition exists.</li>
+<li>Always-treated (and never-treated) units have $\tilde D \approx 0$: they
+   identify the fixed effects, not $\beta$.</li>
+<li>The identifying variance from a cohort treated a share $\bar D_k$ of the
+   panel scales with $\bar D_k(1 - \bar D_k)$: units treated near the middle
+   of the panel dominate.</li>
+</ol>
+<h2 id="the-goodman-bacon-decomposition">The Goodman-Bacon decomposition</h2>
+<p><strong>Theorem (Goodman-Bacon 2021).</strong> With timing groups $k = 1, \dots, K$
+(adoption dates $g_k$) and possibly a never-treated group $U$, the TWFE
+coefficient is exactly</p>
+<p>$$\hat\beta^{DD} = \sum_{k \neq U} s_{kU}\, \hat\beta_{kU}
++ \sum_{k} \sum_{l &gt; k} \left[ s_{kl}^{k}\, \hat\beta_{kl}^{k}
++ s_{kl}^{l}\, \hat\beta_{kl}^{l} \right]$$</p>
+<p>a weighted average of every pairwise 2x2 DiD in the data, with non-negative
+weights summing to one.</p>
+<h3 id="the-three-species-of-2x2">The three species of 2x2</h3>
+<table>
+<thead>
+<tr>
+<th>2x2</th>
+<th>Treatment</th>
+<th>Control</th>
+<th>Window</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>$\hat\beta_{kU}$</td>
+<td>cohort $k$</td>
+<td>never-treated</td>
+<td>full panel</td>
+</tr>
+<tr>
+<td>$\hat\beta_{kl}^{k}$</td>
+<td>earlier cohort $k$</td>
+<td>later cohort $l$, not yet treated</td>
+<td>$t &lt; g_l$</td>
+</tr>
+<tr>
+<td>$\hat\beta_{kl}^{l}$</td>
+<td>later cohort $l$</td>
+<td>earlier cohort $k$, already treated</td>
+<td>$t \geq g_k$</td>
+</tr>
+</tbody>
+</table>
+<p>The first two are legitimate DiDs: their controls are untreated throughout
+the comparison window. The third, the <strong>forbidden comparison</strong>, uses
+already-treated units as controls.</p>
+<h3 id="the-weights">The weights</h3>
+<p>Let $n_k$ be group sizes, $n_{kl} = n_k/(n_k + n_l)$, and $\bar D_k$ the
+share of the panel that cohort $k$ spends treated. Then</p>
+<p>$$s_{kU} \propto (n_k + n_U)^2\, n_{kU}(1-n_{kU})\, \bar D_k(1-\bar D_k)$$</p>
+<p>$$s_{kl}^{k} \propto \left[(n_k+n_l)(1-\bar D_l)\right]^2 n_{kl}(1-n_{kl})\,
+\frac{\bar D_k - \bar D_l}{1-\bar D_l}\cdot\frac{1-\bar D_k}{1-\bar D_l}$$</p>
+<p>$$s_{kl}^{l} \propto \left[(n_k+n_l)\bar D_k\right]^2 n_{kl}(1-n_{kl})\,
+\frac{\bar D_l}{\bar D_k}\cdot\frac{\bar D_k-\bar D_l}{\bar D_k}$$</p>
+<p>normalized to sum to one. Each weight is a product of a subsample-size term,
+a group-balance term, and a treatment-share-variance term. Two design
+lessons: mid-panel adopters get the most weight, and the weights depend only
+on sizes and calendar timing, never on effect magnitudes or precision. Two
+rollouts with identical treatment effects but different calendars estimate
+different TWFE targets.</p>
+<h3 id="why-the-forbidden-comparison-bites">Why the forbidden comparison bites</h3>
+<p>For the pair earlier $k$, later $l$, window $t \geq g_k$, split the window at
+$g_l$ into $W_1 = [g_k, g_l)$ and $W_2 = [g_l, T]$. Under parallel trends,</p>
+<p>$$\hat\beta_{kl}^{l} \xrightarrow{p} \text{ATT}_l(W_2)
+- \left[\text{ATT}_k(W_2) - \text{ATT}_k(W_1)\right].$$</p>
+<p>The bracketed term is the control cohort's <em>effect drift</em> across the window
+split. Constant effects kill it; dynamic effects (effects growing with time
+since adoption) make it positive, so it is subtracted: attenuation first,
+sign reversal when dynamics are strong enough.</p>
+<h3 id="the-estimand-decomposition">The estimand decomposition</h3>
+<p>Taking plims under parallel trends,</p>
+<p>$$\text{plim}\;\hat\beta^{DD} = \text{VWATT} + \text{VWCT} - \Delta\text{ATT}$$</p>
+<ul>
+<li><strong>VWATT</strong>: variance-weighted ATT, the "good" part, though note the
+  aggregation weights are the Bacon $s$, not treated-cell shares.</li>
+<li><strong>VWCT</strong>: variance-weighted common trends, zero when parallel trends holds.</li>
+<li><strong>$\Delta$ATT</strong>: the accumulated within-cohort effect changes subtracted by
+  forbidden comparisons; zero when effects are constant in event time.</li>
+</ul>
+<p>Dynamics enter only through $\Delta$ATT and always with a minus sign: TWFE
+bias from staggering is toward zero and beyond, never away from it. PT
+violations (VWCT) and heterogeneity bias ($\Delta$ATT) are separate terms:
+fixing one does not fix the other. Module 2's estimators fix $\Delta$ATT;
+Module 3 stress-tests VWCT.</p>
+<h2 id="the-running-application">The running application</h2>
+<p>Staggered rollout of a driver zone-notification feature: 30 cities, 60
+weeks, adoption cohorts at weeks 15/25/35 (8 cities each) plus 6
+never-treated cities. City fixed effects and a common weekly trend are built
+in, so parallel trends holds by construction and every bias is the
+estimator's fault. Three treatment-effect scenarios on one DGP:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Effect</th>
+<th>True ATT</th>
+<th>TWFE</th>
+<th>Bias</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>constant</td>
+<td>1.0 flat</td>
+<td>1.000</td>
+<td>0.997</td>
+<td>none</td>
+</tr>
+<tr>
+<td>dynamic</td>
+<td>$0.4[1 + 0.10(t-g)]$</td>
+<td>1.137</td>
+<td>0.686</td>
+<td>-40%</td>
+</tr>
+<tr>
+<td>heterogeneous</td>
+<td>dynamic $\times$ cohort scaling</td>
+<td>1.407</td>
+<td>0.423</td>
+<td>-70%</td>
+</tr>
+</tbody>
+</table>
+<p>The decomposition on the dynamic scenario puts roughly half the weight on
+vs-never comparisons (average estimate near 1.1), a fifth on legitimate
+earlier-vs-later comparisons, and a third on forbidden comparisons whose
+average estimate is 0.08. Same weights on the constant scenario, but every
+2x2 estimates 1.0, so the weighting is harmless.</p>
+<p>Sign reversal needs one more ingredient: <strong>no never-treated anchor</strong>. With
+the 6 never-treated cities in place, even steep dynamics leave TWFE positive
+because half the weight sits on clean vs-never comparisons. Drop them
+(every city eventually adopts, the default at a company that ships
+everywhere) and even mild dynamics of $0.2 + 0.15(t-g)$ produce a <em>negative</em>
+TWFE coefficient against a true ATT near 3, with every cohort-time effect
+strictly positive.</p>
+<h2 id="when-twfe-is-fine">When TWFE is fine</h2>
+<ol>
+<li><strong>Non-staggered designs.</strong> One adoption date plus a clean control group
+   is the 2x2 world; nothing here applies.</li>
+<li><strong>Constant, homogeneous effects.</strong> $\Delta\text{ATT} = 0$ and every 2x2
+   estimates the same quantity; the weighting is irrelevant.</li>
+<li><strong>Negligible forbidden weight.</strong> With a large never-treated group and
+   compressed adoption timing, the forbidden 2x2s may carry trivial weight;
+   TWFE is then approximately VWATT, and you should say so rather than
+   "the ATT".</li>
+</ol>
+<h2 id="practitioner-checklist">Practitioner checklist</h2>
+<ol>
+<li>Map the cohorts: adoption dates, sizes, never-treated share.</li>
+<li>Run <code>bacondecomp::bacon()</code>; report weight by comparison type.</li>
+<li>Plot weight vs estimate per 2x2; look for high-weight outliers.</li>
+<li>Re-estimate with a heterogeneity-robust estimator (Module 2); report the
+   gap.</li>
+<li>If the design is not staggered, say so and skip the ceremony.</li>
+</ol>
+<h2 id="references">References</h2>
+<ul>
+<li>Goodman-Bacon, A. (2021). Difference-in-differences with variation in
+  treatment timing. <em>Journal of Econometrics</em>, 225(2), 254-277.</li>
+<li>de Chaisemartin, C. and D'Haultfoeuille, X. (2020). Two-way fixed effects
+  estimators with heterogeneous treatment effects. <em>American Economic
+  Review</em>, 110(9), 2964-2996.</li>
+<li>Borusyak, K., Jaravel, X. and Spiess, J. (2024). Revisiting event-study
+  designs: robust and efficient estimation. <em>Review of Economic Studies</em>.</li>
+<li>Baker, A., Larcker, D. and Wang, C. (2022). How much should we trust
+  staggered difference-in-differences estimates? <em>Journal of Financial
+  Economics</em>, 144(2), 370-395.</li>
+<li>Roth, J., Sant'Anna, P., Bilinski, A. and Poe, J. (2023). What's trending
+  in difference-in-differences? A synthesis of the recent econometrics
+  literature. <em>Journal of Econometrics</em>, 235(2), 2218-2244.</li>
+</ul>
+</body>
+</html>

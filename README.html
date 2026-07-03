@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Causal Inference Beyond A/B Tests</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="causal-inference-beyond-ab-tests">Causal Inference Beyond A/B Tests</h1>
+<p>A deep-dive companion to the <a href="https://fhoces.github.io/experimentation-refresher/">experimentation refresher</a>,
+specifically expanding the three methods covered as a tour in that course's
+Module 8: modern difference-in-differences, synthetic control, and causal
+forests for heterogeneous treatment effects.</p>
+<h2 id="status">Status</h2>
+<p><strong>Modules 1-8 built</strong> (concepts + slides + exercises, rendered decks
+committed). Course complete.</p>
+<h2 id="why-this-exists">Why this exists</h2>
+<p>The experimentation-refresher covers each of these methods in a single slide
+deck: enough to spot the failure modes of TWFE, recognize when synthetic
+control applies, and read a <code>grf</code> output in an interview. That's a tour, not
+a treatment.</p>
+<p>This course is the treatment. Each method gets a multi-module sequence with
+the formal estimator definitions, the simulation studies that motivate the
+modern alternatives, and the practitioner choices that don't fit on a slide.</p>
+<h2 id="modules">Modules</h2>
+<p>See <a href="learning-plan.html">learning-plan.md</a> for the full breakdown.</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Module</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><a href="module-01/concepts.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2×2s</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>2</td>
+<td><a href="module-02/concepts.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH in Detail</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>3</td>
+<td><a href="module-03/concepts.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>4</td>
+<td><a href="module-04/concepts.html">Synthetic Control: Estimator, Inference, Variants</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>5</td>
+<td><a href="module-05/concepts.html">Synthetic DiD and the Bridge from SC to DiD</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>6</td>
+<td><a href="module-06/concepts.html">Causal Forest: Honest Splitting and Asymptotics</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>7</td>
+<td><a href="module-07/concepts.html">Policy Learning: From τ̂(x) to Deployment Rules</a></td>
+<td>done</td>
+</tr>
+<tr>
+<td>8</td>
+<td><a href="module-08/concepts.html">Matrix Completion and the Modern Panel Toolbox</a></td>
+<td>done</td>
+</tr>
+</tbody>
+</table>
+<h2 id="domain">Domain</h2>
+<p>Following the convention of the sibling course collection, applications use
+ride-sharing (Uber / Lyft style) data. Where formal methods need a specific
+empirical setting (e.g., the original Card-Krueger DiD or the Abadie-Diamond
+California Prop 99 SC), the canonical paper's data is used. The methods
+transfer directly to the standard platform settings: staggered feature
+rollouts, geo-level policy changes, fee or pricing changes in a single
+market, and targeted incentives.</p>
+<h2 id="structure">Structure</h2>
+<p>Each module follows the standard concept → show → drill pattern from the
+sibling courses: <code>concepts.md</code> for the written reference, <code>slides.Rmd</code> for
+the xaringan deck, and <code>exercise.R</code> for runnable drills.</p>
+<h2 id="stack">Stack</h2>
+<p>R, with <code>did</code>, <code>fixest</code>, <code>synthdid</code>, <code>Synth</code>, <code>gsynth</code>, <code>grf</code>, <code>HonestDiD</code>,
+and the standard tidyverse.</p>
+</body>
+</html>

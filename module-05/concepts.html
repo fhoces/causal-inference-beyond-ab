@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Module 5: Synthetic DiD — Concepts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="module-5-synthetic-did">Module 5: Synthetic DiD</h1>
+<p>The bridge from synthetic control to difference-in-differences. Module 4
+built synthetic control (SC) as a weighted match on donor levels; Module 1
+diagnosed TWFE/DiD as a global parallel-trends bet. Arkhangelsky, Athey,
+Hirshberg, Imbens and Wager (2021) show these are two corners of one
+estimator. Synthetic DiD (SDID) sits between them: it reweights <em>units</em>
+like SC and reweights <em>time periods</em> like nobody else, then runs a
+weighted two-way fixed effects regression. The payoff is double robustness
+in the panel sense: SDID is consistent if <em>either</em> the unit weights or the
+time weights succeed, and it is more precise than both parents on the
+canonical data.</p>
+<h2 id="the-estimator-formally">The estimator, formally</h2>
+<p>Block treatment structure: units $i = 1, \dots, N$, periods
+$t = 1, \dots, T$. The last $N_1 = N - N_0$ units are treated in the last
+$T_1 = T - T_0$ periods; $W_{it} = 1$ marks a treated cell. The SDID point
+estimate solves a <em>weighted</em> two-way fixed effects problem:</p>
+<p>$$(\hat\tau, \hat\mu, \hat\alpha, \hat\beta) =
+\arg\min_{\tau, \mu, \alpha, \beta}
+\sum_{i=1}^{N}\sum_{t=1}^{T}
+\left(Y_{it} - \mu - \alpha_i - \beta_t - \tau W_{it}\right)^2
+\hat\omega_i\, \hat\lambda_t$$</p>
+<p>The unit weights $\hat\omega_i$ and time weights $\hat\lambda_t$ are
+computed first, in two separate convex programs, then plugged in. Given the
+weights, $\hat\tau$ has a closed form: a weighted double difference (see
+below). The whole estimator is therefore "solve for weights, then run
+weighted DiD".</p>
+<h3 id="the-unit-weight-program">The unit-weight program</h3>
+<p>The unit weights are chosen so that the weighted average of control units
+tracks the treated units' <em>trajectory</em> across the pre-period, up to a
+constant level shift:</p>
+<p>$$(\hat\omega_0, \hat\omega) =
+\arg\min_{\omega_0 \in \mathbb{R},\, \omega \in \Omega}
+\sum_{t=1}^{T_0}
+\left(\omega_0 + \sum_{i=1}^{N_0}\omega_i Y_{it}
+- \frac{1}{N_1}\sum_{i=N_0+1}^{N} Y_{it}\right)^2
++ \zeta^2\, T_0\, \lVert\omega\rVert_2^2,$$</p>
+<p>over the simplex $\Omega = {\omega \in \mathbb{R}^{N_0}_{\geq 0} :
+\sum_i \omega_i = 1}$. Two features distinguish this from the SC program of
+Module 4:</p>
+<ol>
+<li><strong>An intercept $\omega_0$.</strong> It is free (not on the simplex). Adding it
+   means the donors only have to match the <em>shape</em> of the treated
+   pre-trend, not its level. Level differences are absorbed by $\omega_0$
+   (and, in the final regression, by the unit fixed effect $\alpha_i$).</li>
+<li><strong>A ridge penalty $\zeta^2 T_0 \lVert\omega\rVert_2^2$.</strong> It spreads
+   weight across donors and guarantees a unique solution when donors are
+   collinear. SC uses no such penalty.</li>
+</ol>
+<h3 id="the-regularization-parameter">The regularization parameter</h3>
+<p>The ridge magnitude is not a free tuning knob; the paper pins it to the
+noise scale of the data:</p>
+<p>$$\zeta = (N_1 T_1)^{1/4}\, \hat\sigma,
+\qquad
+\hat\sigma^2 = \frac{1}{N_0 (T_0 - 1)}
+\sum_{i=1}^{N_0}\sum_{t=1}^{T_0 - 1}
+\left(\Delta_{it} - \bar\Delta\right)^2,
+\quad \Delta_{it} = Y_{i, t+1} - Y_{it}.$$</p>
+<p>Here $\hat\sigma$ is the standard deviation of <em>first-differenced</em> control
+outcomes over the pre-period (a scale-free estimate of period-to-period
+noise), and $\bar\Delta$ is their mean. On California Prop 99,
+$\hat\sigma \approx 5.5$ and $\zeta \approx 10.2$. The $(N_1 T_1)^{1/4}$
+factor makes the penalty vanish at the right rate as the panel grows.</p>
+<h3 id="the-time-weight-program">The time-weight program</h3>
+<p>Symmetrically, the time weights make the pre-periods, weighted, resemble
+the post-period for the control units:</p>
+<p>$$(\hat\lambda_0, \hat\lambda) =
+\arg\min_{\lambda_0 \in \mathbb{R},\, \lambda \in \Lambda}
+\sum_{i=1}^{N_0}
+\left(\lambda_0 + \sum_{t=1}^{T_0}\lambda_t Y_{it}
+- \frac{1}{T_1}\sum_{t=T_0+1}^{T} Y_{it}\right)^2,$$</p>
+<p>over $\Lambda = {\lambda \in \mathbb{R}^{T_0}_{\geq 0} :
+\sum_t \lambda_t = 1}$. The time program uses only a negligible
+regularizer (numerical, not statistical): with $T_0$ typically small there
+is no collinearity problem to fix. The time weights concentrate on the
+handful of pre-periods most predictive of the post-period, so the "before"
+baseline is not a flat average over the whole history but a tailored match.
+On Prop 99, only three of the nineteen pre-periods carry meaningful weight.</p>
+<h3 id="local-parallel-trends">Local parallel trends</h3>
+<p>DiD assumes parallel trends <em>globally</em>: the raw average of all controls
+would have moved parallel to the treated units absent treatment. SDID
+weakens this to a <em>local</em> condition. The unit weights construct one
+synthetic control whose pre-trend already matches the treated trajectory;
+parallel trends need only hold for <em>that</em> weighted comparison, over the
+$\hat\lambda$-weighted periods. You are no longer betting that Utah is a
+good counterfactual for California, only that a specific convex combination
+of donor states is, and only over the periods the time weights select. This
+is why SDID tolerates the interactive-fixed-effects (factor) structures that
+sink plain DiD: it matches on the factor loadings implicitly.</p>
+<h2 id="the-bridge-did-sc-sdid">The bridge: DiD, SC, SDID</h2>
+<p>Both parents are corners of the SDID objective.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>uniform time weights $\lambda_t = 1/T$</th>
+<th>optimized time weights $\hat\lambda$</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>uniform unit weights</strong> $\omega_i = 1/N$</td>
+<td><strong>DiD</strong></td>
+<td>time-weighted DiD</td>
+</tr>
+<tr>
+<td><strong>optimized unit weights</strong> $\hat\omega$</td>
+<td><strong>SC</strong> (drop unit FE)</td>
+<td><strong>SDID</strong></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>SDID = DiD</strong> when both weight vectors are uniform. The weighted TWFE
+  objective collapses to ordinary TWFE, and $\hat\tau$ is the plain
+  two-way-fixed-effects DiD coefficient.</li>
+<li><strong>SDID = SC</strong> when the time weights put all mass where SC's implicit
+  comparison does <em>and</em> there is no unit intercept. SC matches the treated
+  unit's pre-period levels with a simplex of donors and has no unit fixed
+  effect; SDID with $\omega_0 = 0$ and $\alpha_i \equiv 0$ recovers exactly
+  that.</li>
+</ul>
+<h3 id="why-the-intercept-changes-everything">Why the intercept changes everything</h3>
+<p>The single most consequential difference between SC and SDID is the unit
+intercept $\omega_0$ in the weight program (equivalently the unit fixed
+effects $\alpha_i$ in the final regression). Pure SC has to match <em>levels</em>:
+the synthetic control must sit on top of the treated unit throughout the
+pre-period, which forces the weights to chase level as well as shape. If no
+convex combination of donors reaches the treated unit's level, SC is
+biased. SDID absorbs the level gap into $\omega_0$, so the donors only have
+to reproduce the treated unit's <em>trend</em>. This is exactly the
+difference-in-differences logic (levels cancel in the double difference)
+imported into the synthetic-control weighting step. It is why SDID needs no
+perfect pre-treatment fit, only a parallel one.</p>
+<h2 id="inference">Inference</h2>
+<p>SDID ships with two variance estimators. Both treat the weights as fixed
+(the paper shows the estimation of $\hat\omega, \hat\lambda$ is
+first-order negligible).</p>
+<ul>
+<li><strong>Placebo variance.</strong> Reassign the treatment to control units, one at a
+  time (or in blocks matching the treated count), re-estimate on the pure
+  control panel where the true effect is zero, and take the variance of the
+  placebo estimates. This works with a single treated unit, which is the
+  common SC/SDID case, and is the default on Prop 99. It requires a
+  homoskedasticity-style assumption across units.</li>
+<li><strong>Jackknife variance.</strong> Delete one unit at a time, re-estimate, and form
+  the usual jackknife variance. It is cheaper and assumption-lighter but
+  <strong>requires at least two treated units</strong>: with one treated unit, deleting
+  it leaves no treated variation and the estimator is undefined (the
+  package returns <code>NA</code>). Use it when several units are treated; fall back to
+  the placebo estimator otherwise.</li>
+</ul>
+<p>A third option, bootstrap, is available for many treated units but is the
+most expensive.</p>
+<h2 id="empirical-comparison-california-prop-99">Empirical comparison: California Prop 99</h2>
+<p>Reproducing the AER paper's headline table live (all three computed with
+<code>synthdid</code>, none hardcoded):</p>
+<table>
+<thead>
+<tr>
+<th>Estimator</th>
+<th>Effect (packs per capita)</th>
+<th>Placebo SE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DiD</td>
+<td>-27.3</td>
+<td>16.3</td>
+</tr>
+<tr>
+<td>SC</td>
+<td>-19.6</td>
+<td>11.0</td>
+</tr>
+<tr>
+<td>SDID</td>
+<td>-15.6</td>
+<td>10.0</td>
+</tr>
+</tbody>
+</table>
+<p>The point estimates are exact; the placebo standard errors are
+simulation-based, so they shift by a point or so from run to run (the table
+above fixes <code>set.seed(1)</code>). DiD is the most negative and least precise: it
+forces all 38 donor states
+to weight equally and bets on global parallel trends, which the raw donor
+average violates (California's cigarette consumption was already on a
+different path). SC tightens this by reweighting donors but pays for a
+perfect level match. SDID lands between the two in point estimate and has
+the smallest standard error: the time weights concentrate the pre-period
+comparison and the ridge-regularized unit weights spread risk across donors.
+The signature <code>synthdid_plot()</code> overlays the treated trajectory, the
+$\hat\omega$-weighted synthetic trajectory, the $\hat\lambda$-weighted
+pre-period band (the shaded region marking which periods anchor the
+baseline), and the parallelogram whose vertical side is $\hat\tau$.</p>
+<h2 id="application-ride-share-factor-structure-panel">Application: ride-share factor-structure panel</h2>
+<p>A cleaner demonstration of <em>why</em> SDID beats DiD uses a simulated panel with
+an interactive fixed-effects structure, where parallel trends fails by
+construction. One treated city and 20 donor cities over 48 months; outcomes
+are driven by two latent factors with city-specific loadings, plus a policy
+(airport-pickup rule) at month 36 with a true effect of 4.0. The treated
+city loads heavily on the trending factor, so the raw donor average drifts
+away from its counterfactual and DiD is badly biased upward:</p>
+<table>
+<thead>
+<tr>
+<th>Estimator</th>
+<th>Effect</th>
+<th>Placebo SE</th>
+<th>Error vs truth (4.0)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SDID</td>
+<td>3.94</td>
+<td>0.62</td>
+<td>0.06</td>
+</tr>
+<tr>
+<td>SC</td>
+<td>4.31</td>
+<td>1.63</td>
+<td>0.31</td>
+</tr>
+<tr>
+<td>DiD</td>
+<td>6.29</td>
+<td>1.76</td>
+<td>2.29</td>
+</tr>
+</tbody>
+</table>
+<p>DiD misreads more than half the trending-factor divergence as treatment
+effect. SC and SDID both reweight donors toward the high-loading cities and
+recover the truth; SDID's time weights and regularization make it the
+sharpest of the three. This is the interactive-fixed-effects regime where
+SDID and generalized SC (<code>gsynth</code>, Module 4) shine and DiD should not be
+trusted.</p>
+<h2 id="practitioner-guidance">Practitioner guidance</h2>
+<ul>
+<li>Reach for SDID when you have a <strong>panel with a clear pre-period and a
+  handful of treated units</strong>, and you suspect the raw control average is not
+  a parallel counterfactual (visible pre-trend divergence, factor
+  structure, level mismatch).</li>
+<li>SDID <strong>degrades gracefully to DiD</strong>: if the unit weights come out near
+  uniform and the time weights near flat, you are in the DiD-is-fine regime
+  and SDID confirms it.</li>
+<li>With a <strong>single treated unit</strong>, use the placebo variance estimator; with
+  <strong>multiple</strong>, prefer the jackknife.</li>
+<li>SDID does not fix everything: it still assumes a low-rank-plus-noise
+  structure and a stable-effect block. For staggered adoption you combine it
+  with the timing machinery of Modules 1 and 2, and for irregular missingness
+  you reach for matrix completion (Module 8).</li>
+</ul>
+<h2 id="references">References</h2>
+<ul>
+<li>Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W. and Wager, S.
+  (2021). Synthetic difference-in-differences. <em>American Economic Review</em>,
+  111(12), 4088-4118.</li>
+<li>Abadie, A., Diamond, A. and Hainmueller, J. (2010). Synthetic control
+  methods for comparative case studies. <em>Journal of the American
+  Statistical Association</em>, 105(490), 493-505.</li>
+<li>Doudchenko, N. and Imbens, G. W. (2016). Balancing, regression,
+  difference-in-differences and synthetic control methods: a synthesis.
+  NBER Working Paper 22791.</li>
+<li>Xu, Y. (2017). Generalized synthetic control method: causal inference with
+  interactive fixed effects models. <em>Political Analysis</em>, 25(1), 57-76.</li>
+<li>Clarke, D., Pailañir, D., Athey, S. and Imbens, G. (2023). Synthetic
+  difference-in-differences estimation. <em>IZA Discussion Paper</em> / Stata and R
+  <code>synthdid</code> implementation notes.</li>
+</ul>
+</body>
+</html>

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Learning Plan — Causal Inference Beyond A/B Tests</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 3em auto;
+    padding: 0 1.2em;
+    color: #222;
+    line-height: 1.6;
+  }
+  h1 { border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  h2 { margin-top: 1.8em; }
+  h3 { margin-top: 1.4em; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; }
+  th, td { padding: 0.5em 0.75em; border: 1px solid #e1e4e8; text-align: left; }
+  th { background: #f6f8fa; }
+  code { background: #f6f8fa; padding: 0.15em 0.4em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 1em; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1em; color: #555; }
+</style>
+<script>
+MathJax = {
+  tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] }
+};
+</script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+<h1 id="causal-inference-beyond-ab-tests-learning-plan">Causal Inference Beyond A/B Tests — Learning Plan</h1>
+<p>A deep-dive companion to <code>experimentation-refresher/module-08</code>. Status:
+<strong>planned, not built.</strong> This document is the spec; modules will follow.</p>
+<h2 id="audience">Audience</h2>
+<p>You've completed the experimentation-refresher Module 8 tour and want the
+formal treatment of each method — the kind of detail an applied
+econometrician or research scientist needs to make tooling decisions, not
+just recognize names.</p>
+<h2 id="module-1-twfe-diagnosed">Module 1 — TWFE Diagnosed</h2>
+<ul>
+<li>The Goodman-Bacon (2021) decomposition: full derivation, weights formula.</li>
+<li>Bacon-decomposition diagnostic in practice (<code>bacondecomp</code> package).</li>
+<li>The "forbidden comparison" (already-treated as control) — visualizing it.</li>
+<li>When TWFE is <em>unbiased</em>: constant effects, no staggering.</li>
+<li><strong>Application:</strong> ride-sharing zone-notification staggered rollout (extends
+  the M8 example to 30 cities and 60 periods, with three different effect
+  heterogeneity scenarios).</li>
+<li><strong>Exercise:</strong> hand-code Bacon weights, replicate the package output.</li>
+</ul>
+<h2 id="module-2-heterogeneity-robust-did">Module 2 — Heterogeneity-Robust DiD</h2>
+<ul>
+<li>Callaway &amp; Sant'Anna (2021) — group-time ATT, full estimator, not-yet-treated
+  vs never-treated controls, doubly-robust adjustment, influence-function SEs.</li>
+<li>Sun &amp; Abraham (2021) — saturated event-study, when it equals CS.</li>
+<li>Borusyak, Jaravel &amp; Spiess (2024) — imputation, efficiency under PT.</li>
+<li>de Chaisemartin &amp; D'Haultfœuille (2020) — multi-period switchers.</li>
+<li>Aggregation choices: simple average vs cohort-weighted vs event-time
+  aggregation. What each answers.</li>
+<li><strong>Application:</strong> same staggered rollout, all four estimators side-by-side.</li>
+<li><strong>Exercise:</strong> implement CS from scratch using <code>Mostly_Harmless</code>-style data,
+  validate against <code>did::att_gt()</code>.</li>
+</ul>
+<h2 id="module-3-honest-did">Module 3 — Honest DiD</h2>
+<ul>
+<li>Rambachan &amp; Roth (2023) — the formal sensitivity framework.</li>
+<li>Restrictions: smoothness ($M$), relative magnitudes, sign restrictions.</li>
+<li>The breakdown value as a sufficient statistic for robustness.</li>
+<li>Practical workflow with the <code>HonestDiD</code> package.</li>
+<li><strong>Application:</strong> event-study estimates from M2, robustified.</li>
+<li><strong>Exercise:</strong> replicate the Roth (2022) pretrend-power simulation.</li>
+</ul>
+<h2 id="module-4-synthetic-control-full-treatment">Module 4 — Synthetic Control: Full Treatment</h2>
+<ul>
+<li>Abadie/Diamond/Hainmueller (2010, 2015) — original estimator, V-matrix.</li>
+<li>Donor pool selection: how to choose, what to avoid.</li>
+<li>Inference — placebo-in-space, placebo-in-time, conformal SCM.</li>
+<li>Augmented SC (Ben-Michael et al. 2021) — bias correction via outcome model.</li>
+<li>Generalized SC / <code>gsynth</code> (Xu 2017) — interactive fixed effects model.</li>
+<li><strong>Application:</strong> California Prop 99 (canonical), then ride-sharing
+  one-city policy change.</li>
+<li><strong>Exercise:</strong> build SC from scratch with <code>quadprog</code>; compare to <code>Synth::synth()</code>.</li>
+</ul>
+<h2 id="module-5-synthetic-did">Module 5 — Synthetic DiD</h2>
+<ul>
+<li>Arkhangelsky et al. (2021) — formal estimator, dual weights, regularization.</li>
+<li>The bridge: when SDID = DiD, when SDID = SC.</li>
+<li>Empirical comparison from the AER paper.</li>
+<li><code>synthdid</code> package: estimation, jackknife SE, the comparison plot.</li>
+<li><strong>Application:</strong> California Prop 99 again, now with SDID overlay.</li>
+<li><strong>Exercise:</strong> implement the dual-weight optimization; compare to package.</li>
+</ul>
+<h2 id="module-6-causal-forest-honest-splitting-and-asymptotics">Module 6 — Causal Forest: Honest Splitting and Asymptotics</h2>
+<ul>
+<li>Wager &amp; Athey (2018) — honest splitting, asymptotic normality.</li>
+<li>Athey, Tibshirani &amp; Wager (2019) — generalized random forests.</li>
+<li>The local moment-condition view: forests as adaptive nearest neighbors.</li>
+<li>Tuning <code>grf</code> — <code>min.node.size</code>, <code>honesty.fraction</code>, <code>tune.parameters</code>.</li>
+<li>HTE diagnostics — calibration, BLP test, omnibus test.</li>
+<li><strong>Application:</strong> zone-notification HTE by city density, tenure, time-of-day.</li>
+<li><strong>Exercise:</strong> implement honest splitting on a 2D toy DGP; verify pointwise CIs.</li>
+</ul>
+<h2 id="module-7-policy-learning">Module 7 — Policy Learning</h2>
+<ul>
+<li>Athey &amp; Wager (2021) — regret bounds for learned policies.</li>
+<li><code>grf::policy_tree()</code> — depth-$L$ decision trees over $X$ for treatment rules.</li>
+<li>Welfare maximization vs welfare estimation — different objectives.</li>
+<li>Cost-aware policies: $\pi(x) = \mathbb{1}{\hat\tau(x) &gt; c(x)}$.</li>
+<li>Off-policy evaluation: doubly-robust value estimates.</li>
+<li><strong>Application:</strong> zone-notification — when to push, to whom, given per-push cost.</li>
+<li><strong>Exercise:</strong> policy-tree on causal-forest output; OPE with cross-fitting.</li>
+</ul>
+<h2 id="module-8-matrix-completion-and-the-modern-panel">Module 8 — Matrix Completion and the Modern Panel</h2>
+<ul>
+<li>Athey et al. (2021) — matrix completion estimator for panel causal effects.</li>
+<li>The connection to SC, SDID, and interactive FE.</li>
+<li><code>gsynth</code>, <code>MCPanel</code>, and the convergence of the panel literature.</li>
+<li>When to reach for matrix completion vs DiD vs SC.</li>
+<li><strong>Application:</strong> sparse panel — many cities, some treated at irregular times.</li>
+<li><strong>Exercise:</strong> simulate a low-rank panel; compare MC, SDID, and CS RMSEs.</li>
+</ul>
+<h2 id="stack">Stack</h2>
+<ul>
+<li><strong>R</strong> — primary.</li>
+<li><strong>fixest</strong> — TWFE and Sun-Abraham.</li>
+<li><strong>did</strong> — Callaway-Sant'Anna.</li>
+<li><strong>didimputation</strong> — Borusyak et al.</li>
+<li><strong>DIDmultiplegt</strong> — de Chaisemartin &amp; D'Haultfœuille.</li>
+<li><strong>HonestDiD</strong> — Rambachan &amp; Roth.</li>
+<li><strong>Synth</strong> — original SC.</li>
+<li><strong>gsynth</strong> — generalized SC, interactive FE.</li>
+<li><strong>synthdid</strong> — Synthetic DiD.</li>
+<li><strong>augsynth</strong> — augmented SC.</li>
+<li><strong>grf</strong> — generalized random forests, causal forest, policy tree.</li>
+<li><strong>MCPanel</strong> — matrix completion.</li>
+</ul>
+<h2 id="key-references">Key References</h2>
+<ul>
+<li>Goodman-Bacon (2021), J. Econometrics.</li>
+<li>Callaway &amp; Sant'Anna (2021), J. Econometrics.</li>
+<li>Sun &amp; Abraham (2021), J. Econometrics.</li>
+<li>Borusyak, Jaravel &amp; Spiess (2024).</li>
+<li>de Chaisemartin &amp; D'Haultfœuille (2020), AER.</li>
+<li>Rambachan &amp; Roth (2023), ReStud.</li>
+<li>Roth (2022), AER:Insights.</li>
+<li>Abadie, Diamond &amp; Hainmueller (2010), JASA; (2015), AJPS.</li>
+<li>Ben-Michael, Feller &amp; Rothstein (2021), JASA — augmented SC.</li>
+<li>Xu (2017), Political Analysis — generalized SC / interactive FE.</li>
+<li>Arkhangelsky et al. (2021), AER — Synthetic DiD.</li>
+<li>Wager &amp; Athey (2018), JASA.</li>
+<li>Athey, Tibshirani &amp; Wager (2019), Annals of Statistics.</li>
+<li>Athey &amp; Wager (2021), Econometrica — policy learning.</li>
+<li>Athey et al. (2021), JASA — matrix completion.</li>
+</ul>
+</body>
+</html>
