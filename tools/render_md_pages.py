@@ -76,6 +76,8 @@ def rewrite_links(src_text):
     src_text = src_text.replace("(../experimentation-refresher/)", f"({EXT_REPO_PAGES})")
     # learning-plan.md -> learning-plan.html (only at repo root context)
     src_text = re.sub(r'\]\(learning-plan\.md\)', '](learning-plan.html)', src_text)
+    # README.md -> README.html (only at repo root context)
+    src_text = re.sub(r'\]\(README\.md\)', '](README.html)', src_text)
     # module-XX/concepts.md -> module-XX/concepts.html
     src_text = re.sub(r'\]\((module-\d+)/concepts\.md\)', r'](\1/concepts.html)', src_text)
     return src_text
