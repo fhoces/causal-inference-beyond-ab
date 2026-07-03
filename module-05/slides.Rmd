@@ -1,0 +1,810 @@
+---
+title: "Module 5: Synthetic DiD"
+subtitle: "The Bridge from Synthetic Control to DiD (Arkhangelsky et al. 2021)"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(synthdid)
+library(quadprog)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r prop99-setup, include=FALSE}
+data("california_prop99", package = "synthdid")
+setup <- panel.matrices(california_prop99)
+tau_sdid <- synthdid_estimate(setup$Y, setup$N0, setup$T0)
+tau_sc   <- sc_estimate(setup$Y, setup$N0, setup$T0)
+tau_did  <- did_estimate(setup$Y, setup$N0, setup$T0)
+ests <- list(SDID = tau_sdid, SC = tau_sc, DID = tau_did)
+```
+
+```{r rideshare-dgp, include=FALSE}
+make_rideshare <- function(n_donors = 20, n_t = 48, g = 36, seed = 7) {
+  set.seed(seed)
+  N <- n_donors + 1                          # city 1 = treated
+  f1 <- seq(0, 6, length.out = n_t) + cumsum(rnorm(n_t, 0, 0.3))  # trending factor
+  f2 <- 2 * sin(2 * pi * (1:n_t) / 12) + cumsum(rnorm(n_t, 0, 0.2)) # seasonal factor
+  L1 <- c(1.5, runif(n_donors, 0.2, 1.7))    # treated loads HIGH on the trend
+  L2 <- c(1.0, runif(n_donors, 0.2, 1.6))
+  mu <- c(30, runif(n_donors, 20, 40))       # city levels
+  expand_grid(city = 1:N, t = 1:n_t) |>
+    mutate(post = t >= g, D = (city == 1) & post,
+           y = mu[city] + L1[city] * f1[t] + L2[city] * f2[t] +
+               if_else(D, 4.0, 0) + rnorm(n(), 0, 1))
+}
+rs <- make_rideshare()
+rs_setup <- panel.matrices(as.data.frame(mutate(rs, w = as.integer(D))),
+                           unit = "city", time = "t", outcome = "y", treatment = "w")
+rs_ests <- list(
+  SDID = synthdid_estimate(rs_setup$Y, rs_setup$N0, rs_setup$T0),
+  SC   = sc_estimate(rs_setup$Y, rs_setup$N0, rs_setup$T0),
+  DID  = did_estimate(rs_setup$Y, rs_setup$N0, rs_setup$T0))
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td><b>5</b></td><td><b>Synthetic DiD and the Bridge from SC to DiD</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+Module 4 built synthetic control by reweighting *donors*. Module 1
+diagnosed DiD as a global parallel-trends bet. Arkhangelsky et al. (2021)
+show these are two corners of **one** estimator, and the interior is better
+than either.
+
+--
+
+**You will be able to:**
+
+1. Write the SDID objective as a weighted TWFE regression, and state both
+   weight programs plus the regularization $\zeta$ from memory.
+2. Locate DiD, SC, and SDID in the unit-weight $\times$ time-weight square,
+   and say precisely what turns one into another.
+3. Explain why the unit intercept is the single change that separates SDID
+   from pure SC.
+4. Compute all three on Prop 99, read the signature plot, and pick the right
+   variance estimator.
+
+--
+
+**Applications:** California Prop 99 (the canonical comparison), then a
+ride-share factor-structure panel where DiD breaks and SDID recovers truth.
+
+---
+
+name: bridge-motivation-main
+
+# Two Estimators, One Weakness Each
+
+.pull-left[
+**DiD (Modules 1-2)**
+
+$$\hat\tau = \Delta\bar y_{\text{treat}} - \Delta\bar y_{\text{ctrl}}$$
+
+- Uses *every* control, weighted equally.
+- Bets on **global** parallel trends.
+- Breaks when the raw control average is on a different path.
+]
+
+.pull-right[
+**Synthetic Control (Module 4)**
+
+$$\hat y^N_{1t} = \sum_i \hat\omega_i\, y_{it}$$
+
+- Reweights donors to match **pre-period levels**.
+- No time reweighting; must fit levels exactly.
+- Fragile when no donor mix reaches the treated level.
+]
+
+--
+
+.highlight-box[
+SDID keeps SC's unit reweighting, **adds** a time reweighting, and **frees**
+the level match with an intercept. The result is a weighted DiD that is
+consistent if *either* set of weights works: double robustness in the panel.
+]
+
+---
+
+name: sdid-objective-main
+
+# The SDID Estimator
+
+Block treatment: last $N_1 = N - N_0$ units treated in the last
+$T_1 = T - T_0$ periods, $W_{it} = 1$ on treated cells. SDID solves a
+**weighted** two-way fixed effects problem:
+
+$$(\hat\tau, \hat\mu, \hat\alpha, \hat\beta) =
+\arg\min_{\tau, \mu, \alpha, \beta}
+\sum_{i=1}^{N}\sum_{t=1}^{T}
+\left(Y_{it} - \mu - \alpha_i - \beta_t - \tau W_{it}\right)^2
+\,\hat\omega_i\, \hat\lambda_t$$
+
+--
+
+Three moving parts, in order:
+
+1. **Unit weights $\hat\omega_i$** on the $N_0$ controls: a synthetic-control
+   match, but with an intercept and ridge penalty.
+2. **Time weights $\hat\lambda_t$** on the $T_0$ pre-periods: which "before"
+   periods to compare against.
+3. **Plug in**, run weighted TWFE. Given the weights, $\hat\tau$ is a
+   *weighted double difference*.
+
+--
+
+.blue-box[
+Compare the identical objective with $\hat\omega_i = 1/N$, $\hat\lambda_t = 1/T$:
+that is ordinary TWFE, i.e. DiD. SDID is DiD with the weights chosen,
+not assumed.
+]
+
+<a href="#reconstruct-detail" class="nav-btn">the double-difference identity</a>
+
+---
+
+name: omega-program-main
+
+# The Unit-Weight Program
+
+Choose donor weights so the weighted control **tracks the treated trend**
+across the pre-period, up to a level shift $\omega_0$:
+
+$$(\hat\omega_0, \hat\omega) = \arg\min_{\omega_0 \in \mathbb{R},\, \omega \in \Omega} \sum_{t=1}^{T_0} \Big(\omega_0 + \sum_{i=1}^{N_0}\omega_i Y_{it} - \tfrac{1}{N_1}\!\!\sum_{i=N_0+1}^{N}\! Y_{it}\Big)^2 + \zeta^2 T_0 \lVert\omega\rVert_2^2$$
+
+over the simplex $\Omega = \{\omega \geq 0, \sum_i \omega_i = 1\}$.
+
+--
+
+Two departures from Module 4's SC program:
+
+- **Intercept $\omega_0$** (free, off the simplex): donors match *shape*,
+  not *level*. Level gaps are absorbed here and by the unit FE $\alpha_i$.
+- **Ridge $\zeta^2 T_0 \lVert\omega\rVert_2^2$**: spreads weight across
+  donors, guarantees a unique solution under collinearity.
+
+<a href="#omega-derivation" class="nav-btn">solve it with quadprog</a>
+<a href="#zeta-detail" class="nav-btn-br">where $\zeta$ comes from</a>
+
+---
+
+name: lambda-program-main
+
+# The Time-Weight Program
+
+Symmetric: choose pre-period weights so the weighted **pre-periods resemble
+the post-period** for the controls:
+
+$$(\hat\lambda_0, \hat\lambda) = \arg\min_{\lambda_0 \in \mathbb{R},\, \lambda \in \Lambda} \sum_{i=1}^{N_0} \Big(\lambda_0 + \sum_{t=1}^{T_0}\lambda_t Y_{it} - \tfrac{1}{T_1}\!\!\sum_{t=T_0+1}^{T}\! Y_{it}\Big)^2$$
+
+over $\Lambda = \{\lambda \geq 0, \sum_t \lambda_t = 1\}$.
+
+--
+
+- No statistical ridge here: $T_0$ is small, no collinearity to fix (a
+  negligible numerical regularizer only).
+- The "before" baseline is **not** a flat average of all history. It
+  concentrates on the pre-periods most predictive of the post-period.
+
+--
+
+.highlight-box[
+On Prop 99, only **3 of 19** pre-periods carry meaningful $\hat\lambda$
+weight. DiD implicitly uses all 19 equally; that is a modeling choice SDID
+declines to make.
+]
+
+---
+
+name: local-pt-main
+
+# What the Weights Buy: Local Parallel Trends
+
+DiD assumes parallel trends **globally**: the raw average of all controls
+would have moved parallel to the treated units.
+
+--
+
+SDID weakens this to a **local** condition:
+
+- $\hat\omega$ builds *one* synthetic control whose pre-trend already matches
+  the treated trajectory.
+- Parallel trends need only hold for **that** weighted comparison...
+- ...over the $\hat\lambda$-weighted **periods**, not all of history.
+
+--
+
+.blue-box[
+You are no longer betting that Utah is a good counterfactual for California.
+You are betting that a *specific convex combination* of donor states is,
+over a *specific weighted window*. That is a far weaker, checkable bet, and
+it is why SDID survives the factor structures that sink DiD.
+]
+
+---
+
+name: bridge-table-main
+
+# The Bridge: One Square, Three Estimators
+
+.small[
+| | uniform time weights $\lambda_t = 1/T$ | optimized time weights $\hat\lambda$ |
+|---|---|---|
+| **uniform unit weights** $\omega_i = 1/N$ | **DiD** | time-weighted DiD |
+| **optimized unit weights** $\hat\omega$ | **SC** (drop unit FE) | **SDID** |
+]
+
+--
+
+- **SDID $\to$ DiD** when both weight vectors go uniform: the weighted TWFE
+  collapses to ordinary TWFE.
+- **SDID $\to$ SC** when the time weights match SC's implicit comparison and
+  the unit intercept is switched off (with $\omega_0 = 0$, $\alpha_i \equiv 0$).
+
+--
+
+.highlight-box[
+DiD and SC are the two axis-aligned corners. SDID is the interior point that
+reweights on **both** margins. "Which method?" becomes "which corner am I
+willing to sit in, and why?"
+]
+
+---
+
+name: intercept-main
+
+# Why the Intercept Changes Everything
+
+Pure **SC** must match *levels*: the synthetic control has to sit on top of
+the treated unit throughout the pre-period. If no donor mix reaches that
+level, SC is biased.
+
+--
+
+**SDID** absorbs the level gap into $\omega_0$ (and $\alpha_i$). Donors only
+reproduce the treated unit's *trend*. This is the difference-in-differences
+move (levels cancel in the double difference) imported into the SC weighting
+step.
+
+--
+
+.pull-left[
+.blue-box[
+**SC needs a good fit.**
+The synthetic must overlap the treated pre-path in level and shape.
+]
+]
+
+.pull-right[
+.highlight-box[
+**SDID needs a parallel fit.**
+The synthetic must move *parallel* to the treated pre-path. A constant gap
+is fine.
+]
+]
+
+--
+
+That one degree of freedom is the whole reason SDID needs no perfect
+pre-treatment fit, only a parallel one.
+
+<a href="#intercept-detail" class="nav-btn">worked contrast</a>
+
+---
+
+name: prop99-code-main
+
+# Live: California Prop 99
+
+The canonical case: a 1988 tobacco tax, one treated state, 38 donors,
+`r ncol(setup$Y)` years.
+
+```{r prop99-run, echo=TRUE}
+data("california_prop99", package = "synthdid")
+setup <- panel.matrices(california_prop99)   # long -> Y, N0, T0, W
+c(N = nrow(setup$Y), T = ncol(setup$Y), N0 = setup$N0, T0 = setup$T0)
+
+tau_sdid <- synthdid_estimate(setup$Y, setup$N0, setup$T0)
+tau_sc   <- sc_estimate(setup$Y, setup$N0, setup$T0)   # same package
+tau_did  <- did_estimate(setup$Y, setup$N0, setup$T0)  # uniform weights
+```
+
+--
+
+`panel.matrices()` reshapes the long panel into the outcome matrix `Y` with
+treated units in the last rows and post-periods in the last columns, exactly
+the block structure the estimator assumes.
+
+---
+
+name: prop99-compare-main
+
+# DiD vs SC vs SDID, Side by Side
+
+```{r prop99-table, echo=TRUE}
+set.seed(1)   # placebo variance resamples control units
+imap_dfr(ests, ~ tibble(
+  Estimator = .y,
+  Estimate  = as.numeric(.x),
+  `Placebo SE` = sqrt(vcov(.x, method = "placebo")))) |>
+  mutate(across(where(is.numeric), ~ round(.x, 2))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+DiD is the most negative and least precise: equal donor weights, global
+parallel trends, both violated here. SC reweights donors but pays for the
+level match. **SDID sits between them in point estimate and has the smallest
+SE**, the AER paper's headline in three rows.
+]
+
+---
+
+name: sdid-plot-main
+
+# The Signature Plot
+
+```{r sdid-plot, echo=FALSE, fig.height=4.7}
+synthdid_plot(ests, facet.vertical = TRUE) +
+  theme(legend.position = "bottom")
+```
+
+.small[
+Treated (blue) vs synthetic (red) trajectory; the shaded band marks the
+$\hat\lambda$-weighted pre-periods; the arrow/parallelogram side is
+$\hat\tau$. SDID's synthetic runs *parallel* to the treated pre-path with a
+gap; DiD's is a flat level shift; SC's overlaps.
+]
+
+---
+
+name: units-plot-main
+
+# Reading the Unit Weights
+
+```{r units-plot, echo=FALSE, fig.height=4.6}
+synthdid_units_plot(tau_sdid) +
+  theme(legend.position = "right",
+        axis.text.x = element_text(angle = 90, vjust = 0.5, size = 7))
+```
+
+.small[
+Each donor's post-period contribution, sized by its $\hat\omega$ weight. A
+few states (Nevada, New Hampshire, Connecticut) carry most of the mass; the
+horizontal line is $\hat\tau$. This is the SC transparency SDID inherits:
+you can name the counterfactual.
+]
+
+---
+
+name: inference-main
+
+# Inference: Placebo and Jackknife
+
+Both estimators treat the weights as fixed (their estimation is first-order
+negligible).
+
+.pull-left[
+**Placebo** `method = "placebo"`
+
+- Reassign treatment to controls, one at a time; variance of the placebo
+  effects.
+- **Works with one treated unit** (the usual SC case).
+- Default on Prop 99.
+]
+
+.pull-right[
+**Jackknife** `method = "jackknife"`
+
+- Delete one unit, re-estimate; usual jackknife variance.
+- Cheaper, lighter assumptions.
+- **Needs $\geq 2$ treated units**: with one, it is undefined.
+]
+
+--
+
+```{r jackknife-demo, echo=TRUE}
+set.seed(1)
+c(placebo   = sqrt(vcov(tau_sdid, method = "placebo")),
+  jackknife = sqrt(vcov(tau_sdid, method = "jackknife")))  # NA: 1 treated unit
+```
+
+<a href="#jackknife-detail" class="nav-btn">when to use which</a>
+
+---
+
+name: rideshare-main
+
+# Application 2: A Panel Where DiD Must Fail
+
+One treated city, 20 donors, 48 months. Outcomes driven by **two latent
+factors** with city-specific loadings, plus an airport-pickup policy at
+month 36 (true effect $= 4.0$).
+
+```{r rideshare-plot, echo=FALSE, fig.height=4.2}
+rs |>
+  mutate(grp = if_else(city == 1, "Treated city", "Donor cities")) |>
+  group_by(grp, t) |>
+  summarise(y = mean(y), .groups = "drop") |>
+  ggplot(aes(t, y, color = grp, linewidth = grp)) +
+  geom_vline(xintercept = 36, linetype = "dashed", alpha = 0.5) +
+  geom_line() +
+  scale_linewidth_manual(values = c("Treated city" = 1.3, "Donor cities" = 0.7)) +
+  scale_color_manual(values = c("Treated city" = "#1565c0", "Donor cities" = "#e65100")) +
+  labs(x = "Month", y = "Mean outcome", color = NULL,
+       title = "Treated city loads heavily on the trending factor") +
+  guides(linewidth = "none") + theme(legend.position = "bottom")
+```
+
+<a href="#rideshare-dgp-bk" class="nav-btn">DGP code</a>
+
+---
+
+name: rideshare-results-main
+
+# Factor Structure: SDID Recovers, DiD Does Not
+
+```{r rideshare-table, echo=TRUE}
+set.seed(1)   # placebo variance resampling
+imap_dfr(rs_ests, ~ tibble(
+  Estimator = .y, Estimate = as.numeric(.x),
+  `Placebo SE` = sqrt(vcov(.x, method = "placebo")),
+  `|error|`  = abs(as.numeric(.x) - 4.0))) |>       # truth = 4.0
+  mutate(across(where(is.numeric), ~ round(.x, 2))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+DiD reads **more than half the trending-factor divergence as treatment
+effect** (6.29 vs 4.0). SC and SDID reweight toward the high-loading donor
+cities and recover the truth; SDID is the sharpest. This is the
+interactive-fixed-effects regime where SDID and `gsynth` belong and DiD does
+not.
+]
+
+---
+
+name: guidance-main
+
+# When to Reach for SDID
+
+.small[
+| Situation | Call |
+|---|---|
+| Panel, clear pre-period, few treated units, suspected non-parallel controls | **SDID** |
+| Unit weights near uniform, time weights near flat | DiD is fine; SDID confirms it |
+| Perfect pre-fit achievable, level match matters | SC still reasonable |
+| Interactive fixed effects / factor structure | SDID or `gsynth` (Module 4) |
+| One treated unit | placebo SE |
+| Several treated units | jackknife SE |
+| Staggered adoption / irregular missingness | combine with Modules 1-2, or matrix completion (Module 8) |
+]
+
+--
+
+.blue-box[
+The interview one-liner: "SDID is a weighted DiD whose unit weights are a
+regularized synthetic control with an intercept, and whose time weights pick
+the comparison periods. It degrades to DiD when weights go uniform and to SC
+when you drop the intercept, and it is doubly robust: consistent if either
+weight set is right."
+]
+
+---
+
+name: m5-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "How is SDID different from synthetic control?" | Adds time weights and a unit intercept/FE, plus ridge on the unit weights. The intercept means donors match trend not level, so no perfect pre-fit is needed. |
+| "When does SDID reduce to plain DiD?" | When unit and time weights are both uniform: the weighted TWFE becomes ordinary TWFE. Happens when donors are exchangeable and history is homogeneous. |
+| "Why is SDID often more precise than SC or DiD?" | Time weights concentrate the comparison on informative periods and the ridge spreads unit weight across donors, both reducing variance. On Prop 99 its SE is the smallest of the three. |
+| "You have one treated market. How do you get a standard error?" | Placebo variance: reassign treatment to controls, take the spread of placebo effects. Jackknife is undefined with one treated unit. |
+| "What is SDID's identifying assumption?" | Local parallel trends: the $\hat\omega$-weighted control moves parallel to the treated unit over the $\hat\lambda$-weighted pre-periods. Weaker than DiD's global PT. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Arkhangelsky, Athey, Hirshberg, Imbens and Wager (2021), *AER* | The estimator on these slides: dual weights, $\zeta$, asymptotics, placebo/jackknife inference. |
+| Abadie, Diamond and Hainmueller (2010), *JASA* | The SC parent: unit weights matching pre-period levels, placebo-in-space inference. |
+| Doudchenko and Imbens (2016), *NBER WP* | The synthesis that anticipated SDID: intercept + unconstrained weights bridge DiD and SC. |
+| Xu (2017), *Political Analysis* | Generalized SC / interactive fixed effects: the factor-model view SDID approximates. |
+| Clarke, Pailañir, Athey and Imbens (2023) | Practical `synthdid` guidance: staggered adoption, covariates, inference choices. |
+]
+
+**Next module:** we leave panels for cross-sections and heterogeneous
+effects: causal forests, honest splitting, and pointwise CIs.
+
+**Drill:** `exercise.R` reconstructs $\hat\tau$ from the package's own
+weights to 1e-10, then re-solves both weight programs with `quadprog` and
+compares to the package's Frank-Wolfe solution.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: reconstruct-detail
+
+# Backup: SDID Is a Weighted Double Difference
+
+.small[
+Given the weights, extend $\hat\omega$ with $1/N_1$ on each treated unit and
+$\hat\lambda$ with $1/T_1$ on each post-period. Then $\hat\tau$ is the
+weighted double difference:
+
+$$\hat\tau = \Big(\underbrace{\bar Y^{\text{post}}_{\text{tr}}}_{\text{treated, post}} - \underbrace{\textstyle\sum_t \hat\lambda_t \bar Y^{t}_{\text{tr}}}_{\text{treated, }\hat\lambda\text{-pre}}\Big) - \Big(\underbrace{\textstyle\sum_i \hat\omega_i \bar Y^{\text{post}}_{i}}_{\hat\omega\text{-ctrl, post}} - \underbrace{\textstyle\sum_i\sum_t \hat\omega_i \hat\lambda_t Y_{it}}_{\hat\omega,\hat\lambda\text{-ctrl, pre}}\Big)$$
+
+- First parenthesis: treated units' post-minus-(weighted)-pre change.
+- Second: the synthetic control's post-minus-(weighted)-pre change.
+- Their difference is a DiD, but with donor weights $\hat\omega$ **and**
+  period weights $\hat\lambda$ instead of uniform ones.
+
+Set $\hat\omega_i = 1/N_0$ and $\hat\lambda_t = 1/T_0$ and this is exactly
+the two-group DiD formula from Module 1. The exercise verifies the identity
+holds to 1e-10 using `attr(tau, "weights")`.
+]
+
+<a href="#sdid-objective-main" class="nav-btn-br">← back</a>
+
+---
+
+name: omega-derivation
+
+# Backup: Solving the Unit Program with quadprog
+
+.small[
+The unit program is a quadratic program. Stack the intercept and weights as
+$b = (\omega_0, \omega)$, let $X$ be the $T_0 \times (N_0 + 1)$ matrix
+$[\,\mathbf{1}\ \ Y^{\text{ctrl, pre}\top}\,]$ and $y$ the treated
+pre-period average. Minimize
+
+$$\lVert Xb - y\rVert^2 + \zeta^2 T_0\, b^\top P b,
+\qquad P = \mathrm{diag}(0, 1, \dots, 1)$$
+
+(the $0$ leaves the intercept unpenalized), subject to
+$\sum_i \omega_i = 1$ and $\omega_i \geq 0$. In `quadprog` form,
+$D = 2(X^\top X + \zeta^2 T_0 P)$, $d = 2 X^\top y$, one equality row and
+$N_0$ non-negativity rows:
+
+```{r omega-qp-show, eval=FALSE}
+Dmat <- 2 * (t(X) %*% X + zeta^2 * T0 * P)
+Amat <- cbind(c(0, rep(1, N0)), rbind(0, diag(N0)))  # sum=1, then w>=0
+solve.QP(Dmat, 2 * t(X) %*% y, Amat, c(1, rep(0, N0)), meq = 1)
+```
+
+The package uses **Frank-Wolfe**, not a QP solver, so the two agree closely
+but not exactly. On Prop 99: $\mathrm{cor}(\hat\omega_{\text{QP}}, \hat\omega_{\text{pkg}}) \approx 0.9998$
+and the two $\hat\tau$ differ by $\approx 4\times 10^{-4}$. Close, and the exercise says so out loud.
+]
+
+<a href="#omega-program-main" class="nav-btn-br">← back</a>
+
+---
+
+name: zeta-detail
+
+# Backup: The Regularization Parameter
+
+.small[
+$$\zeta = (N_1 T_1)^{1/4}\, \hat\sigma,
+\qquad
+\hat\sigma^2 = \frac{1}{N_0 (T_0 - 1)}
+\sum_{i=1}^{N_0}\sum_{t=1}^{T_0 - 1}
+\left(\Delta_{it} - \bar\Delta\right)^2,
+\quad \Delta_{it} = Y_{i, t+1} - Y_{it}$$
+
+- $\hat\sigma$ is the SD of **first-differenced** control outcomes over the
+  pre-period: a scale-free estimate of one-period noise, robust to unit
+  levels and common trends (differencing kills both).
+- $\bar\Delta$ is the average first difference (the common drift).
+- The $(N_1 T_1)^{1/4}$ factor makes the ridge shrink at the rate that keeps
+  the estimator $\sqrt{N_1 T_1}$-consistent as the panel grows.
+
+Why penalize at all? Without it, collinear donors let the weights explode to
+chase noise in the pre-fit (classic SC overfitting). The ridge spreads mass
+and stabilizes. On Prop 99, $\hat\sigma \approx 5.5$ and $\zeta \approx 10.2$;
+the exercise computes both from the raw matrix.
+
+Note: the **time** program uses only a negligible regularizer. Time weights
+face no donor-collinearity problem (here $T_0$ is small), so no statistical
+shrinkage is needed there.
+]
+
+<a href="#omega-program-main" class="nav-btn-br">← back</a>
+
+---
+
+name: intercept-detail
+
+# Backup: Intercept, Worked Contrast
+
+.small[
+Suppose the treated unit sits 20 units *above* every donor in the
+pre-period, but moves perfectly parallel to donor 3.
+
+**Pure SC** (no intercept, weights on the simplex): no convex combination of
+donors can reach 20 units above all of them, since a weighted average of the
+donors lies *within* their range. SC settles for the closest reachable
+level, distorting the weights away from donor 3 and biasing the
+counterfactual.
+
+**SDID** (intercept $\omega_0$): set $\omega_0 = 20$ and put all weight on
+donor 3. The pre-fit is exact *in shape*; the 20-unit level gap is carried
+by the intercept, and later by the unit fixed effect $\alpha_i$ in the
+weighted regression. Donor 3 is correctly identified as the counterfactual.
+
+This is the difference-in-differences insight (a constant level gap is
+harmless because it cancels in the double difference) transplanted into the
+weighting step. It is also why SDID does not require, and does not reward,
+a perfect-level pre-fit the way SC does.
+]
+
+<a href="#intercept-main" class="nav-btn-br">← back</a>
+
+---
+
+name: jackknife-detail
+
+# Backup: Placebo vs Jackknife, Concretely
+
+.small[
+| | Placebo | Jackknife |
+|---|---|---|
+| Idea | assign fake treatment to controls | leave-one-unit-out resampling |
+| Treated units needed | $\geq 1$ | $\geq 2$ |
+| Assumption | homoskedastic-style across units | lighter, standard jackknife |
+| Cost | one re-estimate per control | one re-estimate per unit |
+| Prop 99 | the default (1 treated state) | returns `NA` |
+
+**Why jackknife breaks with one treated unit.** The jackknife variance sums
+squared deviations of leave-one-out estimates. Deleting the single treated
+unit removes *all* treated variation, so that leave-one-out estimate is
+undefined; the package returns `NA` rather than a misleading number.
+
+**Placebo mechanics.** For each control $j$, pretend $j$ was treated at the
+same time, re-estimate on the remaining controls (true effect zero), collect
+$\hat\tau^{\text{placebo}}_j$. The variance of these is the placebo variance.
+It is exact under the assumption that the treated unit is exchangeable with
+the controls in its noise distribution.
+
+**Rule.** One treated unit: placebo. Several treated units: jackknife
+(cheaper, and the exchangeability assumption is doing less work). Many
+treated units: bootstrap is also available.
+]
+
+<a href="#inference-main" class="nav-btn-br">← back</a>
+
+---
+
+name: rideshare-dgp-bk
+
+# Backup: The Factor-Structure DGP
+
+.small[
+```{r rideshare-dgp-show, eval=FALSE}
+make_rideshare <- function(n_donors = 20, n_t = 48, g = 36, seed = 7) {
+  set.seed(seed)
+  N  <- n_donors + 1                                    # city 1 = treated
+  f1 <- seq(0, 6, length.out = n_t) + cumsum(rnorm(n_t, 0, 0.3))    # trend
+  f2 <- 2 * sin(2 * pi * (1:n_t) / 12) + cumsum(rnorm(n_t, 0, 0.2)) # seasonal
+  L1 <- c(1.5, runif(n_donors, 0.2, 1.7))              # treated loads HIGH on f1
+  L2 <- c(1.0, runif(n_donors, 0.2, 1.6))
+  mu <- c(30, runif(n_donors, 20, 40))                 # city levels
+  expand_grid(city = 1:N, t = 1:n_t) |>
+    mutate(post = t >= g, D = (city == 1) & post,
+           y = mu[city] + L1[city]*f1[t] + L2[city]*f2[t] +
+               if_else(D, 4.0, 0) + rnorm(n(), 0, 1))   # true effect = 4
+}
+```
+
+- Two latent factors with **city-specific loadings** is exactly an
+  interactive-fixed-effects model: $Y_{it} = \mu_i + L_i^\top f_t + \tau D_{it} + \varepsilon_{it}$.
+  Parallel trends fails because loadings differ across cities.
+- The treated city's high $f_1$ loading (1.5, near the top of the donor
+  range) makes its counterfactual *diverge* from the donor average, so DiD
+  is biased upward. SC and SDID reweight toward high-loading donors and
+  recover the truth.
+- The treated loading stays *inside* the donor hull (donors span 0.2 to
+  1.7), so a convex synthetic control exists.
+]
+
+<a href="#rideshare-main" class="nav-btn-br">← back</a>
