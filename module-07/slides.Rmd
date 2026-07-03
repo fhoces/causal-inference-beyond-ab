@@ -1,0 +1,769 @@
+---
+title: "Module 7: Policy Learning"
+subtitle: "From HTE Estimates to Deployment Rules"
+output:
+  xaringan::moon_reader:
+    css: [default, default-fonts]
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+      ratio: "16:9"
+---
+
+```{css, echo=FALSE}
+.remark-code, .remark-inline-code { font-size: 80%; }
+.remark-slide-content { padding: 1em 2em; }
+.small { font-size: 80%; }
+.tiny { font-size: 65%; }
+.highlight-box {
+  background: #fff3e0;
+  border-left: 4px solid #e65100;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.blue-box {
+  background: #e3f2fd;
+  border-left: 4px solid #1565c0;
+  padding: 0.5em 1em;
+  margin: 0.5em 0;
+}
+.nav-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 40px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn:hover { background: #c5cae9; }
+.nav-btn-br {
+  position: absolute;
+  bottom: 12px;
+  right: 70px;
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  z-index: 100;
+  text-decoration: none;
+  color: #1a237e;
+}
+.nav-btn-br:hover { background: #c5cae9; }
+.inline-btn {
+  font-size: 11px;
+  background: #e8eaf6;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-decoration: none;
+  color: #1a237e;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.inline-btn:hover { background: #c5cae9; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, fig.align = "center",
+  fig.width = 10, fig.height = 4.5, dpi = 150,
+  message = FALSE, warning = FALSE
+)
+library(tidyverse)
+library(grf)
+library(policytree)
+theme_set(theme_minimal(base_size = 14))
+set.seed(42)
+```
+
+```{r make-hte, include=FALSE}
+make_hte_data <- function(n = 6000, seed = 42) {
+  set.seed(seed)
+  tibble(
+    density  = runif(n),                        # city density percentile
+    tenure   = pmin(rexp(n, 1 / 18), 90),       # months on platform
+    peak_shr = rbeta(n, 2, 3),                  # share of hours in peak
+    rating   = pmin(pmax(rnorm(n, 4.7, 0.2), 3.5), 5),
+    w        = rbinom(n, 1, 0.5),
+    tau      = 1.5 * density - 0.02 * tenure + 2.0 * density * peak_shr,
+    y        = 10 + 5 * density + 0.05 * tenure + 3 * peak_shr +
+               tau * w + rnorm(n, 0, 2)
+  )
+}
+```
+
+```{r compute-all, include=FALSE, cache=FALSE}
+# fit everything once; reuse across slides
+dat  <- make_hte_data(6000)
+cost <- 0.6
+covs <- c("density", "tenure", "peak_shr", "rating")
+X <- as.matrix(dat[, covs]); Y <- dat$y; W <- dat$w; e <- 0.5
+
+cf      <- causal_forest(X, Y, W, W.hat = e, num.trees = 2000, seed = 42)
+tau_hat <- predict(cf)$predictions
+Gamma   <- double_robust_scores(cf)          # n x 2: control, treated
+
+Gamma_net <- Gamma                            # cost-aware: net the treated col
+Gamma_net[, "treated"] <- Gamma_net[, "treated"] - cost
+tree      <- policy_tree(X, Gamma_net, depth = 2)
+tree_free <- policy_tree(X, Gamma,     depth = 2)   # cost-free, for contrast
+act       <- predict(tree, X)                 # 1 = control, 2 = treat
+
+opt_share    <- mean(dat$tau  > cost)
+plugin_share <- mean(tau_hat  > cost)
+tree_share   <- mean(act == 2)
+
+# honest 50/50 split for off-policy evaluation (fast)
+set.seed(1)
+tr <- sample(c(TRUE, FALSE), nrow(X), replace = TRUE, prob = c(.5, .5)); te <- !tr
+cf_tr <- causal_forest(X[tr, ], Y[tr], W[tr], W.hat = e, num.trees = 2000, seed = 1)
+yf_tr <- regression_forest(X[tr, ], Y[tr], num.trees = 2000, seed = 1)
+Gtr   <- double_robust_scores(cf_tr); Gtr[, "treated"] <- Gtr[, "treated"] - cost
+tree_tr <- policy_tree(X[tr, ], Gtr, depth = 2)
+
+tau_te <- predict(cf_tr, X[te, ])$predictions
+m_te   <- predict(yf_tr, X[te, ])$predictions
+mu1 <- m_te + (1 - e) * tau_te; mu0 <- m_te - e * tau_te
+Gte <- cbind(control = mu0 + (1 - W[te]) / (1 - e) * (Y[te] - mu0),
+             treated = mu1 +      W[te]  /      e  * (Y[te] - mu1))
+
+dr_val <- function(a) {                        # a in {1,2}; net of cost
+  ch <- ifelse(a == 2, Gte[, "treated"] - cost, Gte[, "control"])
+  c(value = mean(ch), se = sd(ch) / sqrt(length(ch)))
+}
+policies <- list(
+  `treat none`    = rep(1L, sum(te)),
+  `treat all`     = rep(2L, sum(te)),
+  `oracle`        = ifelse(dat$tau[te] > cost, 2L, 1L),
+  `forest plug-in`= ifelse(tau_te      > cost, 2L, 1L),
+  `depth-2 tree`  = predict(tree_tr, X[te, ]))
+base_val <- dr_val(policies[["treat none"]])["value"]
+league <- imap_dfr(policies, ~ tibble(policy = .y,
+  value = dr_val(.x)["value"], se = dr_val(.x)["se"],
+  gain = dr_val(.x)["value"] - base_val, share = mean(.x == 2)))
+
+# naive same-data value of the learned tree (the optimism)
+a_naive <- predict(tree_tr, X[tr, ])
+Gtr_full <- double_robust_scores(cf_tr)
+naive_gain <- mean(ifelse(a_naive == 2, Gtr_full[, "treated"] - cost,
+                          Gtr_full[, "control"])) - mean(Gtr_full[, "control"])
+honest_tree_gain <- league$gain[league$policy == "depth-2 tree"]
+```
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td><a href="../module-01/slides.html">TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s</a></td><td>done</td></tr>
+<tr><td>2</td><td><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></td><td>done</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td><b>7</b></td><td><b>Policy Learning: From HTE to Deployment Rules</b> <i>(you are here)</i></td><td>current</td></tr>
+<tr><td>8</td><td>Matrix Completion and the Modern Panel Toolbox</td><td>upcoming</td></tr>
+</table>
+
+---
+
+# This Module
+
+Module 6 gave us $\hat\tau(x)$: a calibrated map from driver features to
+conditional effects. That answers *to whom* the push works. It does **not**
+tell us what to deploy.
+
+--
+
+**You will be able to:**
+
+1. State the policy learning problem: choose $\pi: X \to \{0,1\}$ in a class
+   $\Pi$ to maximize the value $V(\pi)$, and say why welfare maximization is a
+   different objective from CATE estimation.
+2. Build doubly-robust scores and run empirical welfare maximization; state
+   the Athey-Wager (2021) regret bound and why restricting $\Pi$ helps.
+3. Fit `policy_tree`, read the rule, and make it cost-aware.
+4. Evaluate a policy off-policy with cross-fitting, and avoid the naive trap
+   of scoring a policy on its own training data.
+
+--
+
+**Running application:** the zone-notification push to 6000 drivers from
+Module 6, now with a per-push cost $c = 0.6$. When to push, and to whom?
+
+---
+
+name: problem-main
+
+# The Policy Learning Problem
+
+A policy is a map $\pi : X \to \{0, 1\}$: a treat / do-not-treat decision for
+every covariate profile. Its **value** is the expected outcome under
+deployment:
+
+$$V(\pi) = E\big[ Y(\pi(X)) \big] = E\big[ Y(0) + \pi(X)\,\tau(X) \big].$$
+
+--
+
+We want the best rule in a class $\Pi$:
+
+$$\pi^\star = \arg\max_{\pi \in \Pi}\, V(\pi).$$
+
+- Unconstrained optimum: the pointwise rule $\pi(x) = \mathbb{1}\{\tau(x) > c\}$
+  for a per-unit cost $c$.
+- Restricted $\Pi$ (shallow trees, monotone or linear-index rules): a little
+  value traded for interpretability, fairness, implementability.
+
+--
+
+.blue-box[
+ATE answered "ship?". HTE answered "to whom is it strong?". Policy learning
+answers "**what rule do we deploy?**"
+]
+
+---
+
+name: welfare-vs-estimation-main
+
+# Welfare Maximization $\neq$ Welfare Estimation
+
+The single most important idea in the module. Estimating $\tau(x)$ well and
+choosing a good policy are **different objectives**.
+
+.pull-left[
+**CATE estimation** (Module 6)
+
+Judged on error in *levels*:
+$$E\big[(\hat\tau(x) - \tau(x))^2\big]$$
+pointwise coverage, calibration.
+]
+
+.pull-right[
+**Policy learning** (this module)
+
+Judged only on getting the *sign* of
+$\tau(x) - c$ right, weighted by
+$|\tau(x) - c|$. Needs **ranking**, not
+unbiased levels.
+]
+
+--
+
+.highlight-box[
+A biased $\hat\tau$ that preserves the ordering around $c$ gives the optimal
+policy. An unbiased but noisy $\hat\tau$ can give a worse one. All the action
+is near the boundary $\tau(x) = c$, exactly where levels are hardest and least
+consequential for MSE.
+]
+
+--
+
+So optimize welfare **directly** on unbiased value estimates, not a plug-in of
+a CATE fit. <a href="#regret-detail" class="inline-btn">regret theory</a>
+
+---
+
+name: dr-scores-main
+
+# Doubly-Robust Scores
+
+To optimize welfare from finite data we need an unbiased, low-variance
+estimate of $V(\pi)$. Build a per-arm AIPW score, an unbiased estimate of the
+potential outcome under each arm:
+
+$$\Gamma_i(w) = \hat\mu_w(X_i) +
+\frac{\mathbb{1}\{W_i = w\}}{\hat e_w(X_i)}\big(Y_i - \hat\mu_w(X_i)\big),
+\qquad w \in \{0, 1\}.$$
+
+--
+
+- $\hat\mu_w(x) = \hat E[Y \mid X = x, W = w]$: outcome model.
+- $\hat e_w(x) = \hat P(W = w \mid X = x)$: propensity. Here **known**:
+  $\hat e_1 = 0.5$.
+- **Doubly robust:** unbiased if *either* $\hat\mu_w$ or $\hat e_w$ is right.
+
+--
+
+`grf` builds them from the causal forest, using its marginal fit $\hat m$ and
+effect $\hat\tau$: $\hat\mu_1 = \hat m + (1-\hat e)\hat\tau$,
+$\hat\mu_0 = \hat m - \hat e\hat\tau$.
+
+```{r dr-show, eval=FALSE}
+Gamma <- policytree::double_robust_scores(cf)  # n x 2: control, treated
+```
+
+<a href="#aipw-derivation" class="nav-btn">the algebra</a>
+
+---
+
+name: plugin-inferior-main
+
+# Why the Plug-In Rule Is Inferior
+
+The tempting shortcut: $\hat\pi(x) = \mathbb{1}\{\hat\tau(x) > c\}$ straight off
+the forest. It is dominated by learning on DR scores.
+
+--
+
+1. **Regularization bias.** $\hat\tau$ is a *regularized*, biased estimate. The
+   plug-in inherits that bias at the boundary, precisely where decisions flip.
+   The DR score's residual term corrects first-order outcome-model error.
+
+--
+
+2. **Wrong loss.** The forest split criterion targets CATE heterogeneity
+   (MSE-like), not welfare. Learning the policy on $\Gamma$ optimizes value
+   directly and is Neyman-orthogonal: welfare is insensitive to first-order
+   nuisance error.
+
+--
+
+.blue-box[
+Use the forest to build $\hat\tau$ and $\hat\mu$; use the **scores** to choose
+the rule. Not $\hat\tau > c$.
+]
+
+---
+
+name: ewm-main
+
+# Empirical Welfare Maximization
+
+Athey and Wager (2021): the learned policy maximizes summed DR reward over the
+class $\Pi$:
+
+$$\hat\pi = \arg\max_{\pi \in \Pi}\, \frac{1}{n}\sum_{i=1}^n
+\Big[\Gamma_i(1)\,\pi(X_i) + \Gamma_i(0)\,(1 - \pi(X_i))\Big].$$
+
+--
+
+Performance is **regret** against the best rule in the class:
+
+$$R(\hat\pi) = V(\pi^\star_\Pi) - V(\hat\pi)
+= O_p\!\left(\sqrt{\tfrac{\text{VC}(\Pi)}{n}}\right).$$
+
+--
+
+.highlight-box[
+**Restricting $\Pi$ is a feature.** Regret is measured against the best rule
+*in the class*, and the rate improves as the VC dimension shrinks. A depth-2
+tree converges fast **and** is interpretable, auditable, deployable. You pick
+$\Pi$ for constraints and get a tighter bound for free.
+]
+
+<a href="#regret-detail" class="nav-btn">utilitarian vs pointwise</a>
+
+---
+
+name: fit-tree-main
+
+# `policy_tree` in Practice
+
+`policy_tree` does an **exact** search over all depth $L$ axis-aligned trees,
+maximizing summed DR reward. Not greedy CART: globally optimal on the welfare
+objective.
+
+```{r fit-live, eval=FALSE}
+cf    <- causal_forest(X, Y, W, W.hat = 0.5, num.trees = 2000)
+Gamma <- double_robust_scores(cf)          # n x 2: control, treated
+tree  <- policy_tree(X, Gamma, depth = 2)  # exact search, 3 splits
+predict(tree, X)                            # actions: 1 = control, 2 = treat
+```
+
+--
+
+```{r tree-print, echo=FALSE}
+tree_free
+```
+
+<a href="#depth-detail" class="nav-btn">depth trade-offs</a>
+
+---
+
+name: read-tree-main
+
+# Reading the Rule (Cost-Aware)
+
+Net the cost: subtract $c$ from the treated column of $\Gamma$ before fitting,
+so the tree only treats where the effect clears the bar.
+
+```{r cost-live, eval=FALSE}
+Gamma_net <- Gamma
+Gamma_net[, "treated"] <- Gamma_net[, "treated"] - cost   # c = 0.6
+tree <- policy_tree(X, Gamma_net, depth = 2)
+```
+
+--
+
+```{r tree-cost-print, echo=FALSE}
+tree
+```
+
+--
+
+.small[
+Newer drivers (tenure below about 28 months) are treated once density clears
+about 0.27; veterans only in the densest markets (density above about 0.73).
+Matches the DGP: tenure lowers $\tau$, so veterans need a denser market to pay
+off. The rule treats `r sprintf("%.0f%%", 100*tree_share)` of drivers.
+]
+
+---
+
+name: cost-shifts-main
+
+# The Cost Bends the Rule
+
+Same DR scores, three cost levels. Higher $c$ shrinks the treat region: the
+effect must clear a higher bar.
+
+```{r cost-sweep, echo=FALSE, fig.height=3.4}
+sweep <- map_dfr(c(0.0, 0.6, 1.2), function(cc) {
+  G <- Gamma; G[, "treated"] <- G[, "treated"] - cc
+  tt <- policy_tree(X, G, depth = 2)
+  tibble(cost = cc, share = mean(predict(tt, X) == 2))
+})
+tibble(cost = seq(0, 1.6, by = 0.2)) |>
+  mutate(opt_share = map_dbl(cost, ~ mean(dat$tau > .x))) |>
+  ggplot(aes(cost, opt_share)) +
+  geom_line(linewidth = 1, color = "#1565c0") +
+  geom_point(data = sweep, aes(cost, share), size = 4, color = "#e65100") +
+  annotate("text", x = 1.2, y = 0.72, size = 3.6, color = "#e65100",
+           label = "orange = depth-2 tree share") +
+  labs(x = "Per-push cost c", y = "Share treated",
+       title = "True optimal share (line) and the tree's share (points) fall with cost")
+```
+
+At $c = 0.6$ the true optimal share is
+`r sprintf("%.0f%%", 100*opt_share)`; the tree treats
+`r sprintf("%.0f%%", 100*tree_share)`.
+
+---
+
+name: ope-main
+
+# Off-Policy Evaluation
+
+Given any candidate $\pi$, estimate its value from RCT data with the
+doubly-robust value estimator:
+
+$$\hat V(\pi) = \frac{1}{n}\sum_{i=1}^n
+\Big[\Gamma_i(0) + \pi(X_i)\big(\Gamma_i(1) - \Gamma_i(0)\big)\Big],$$
+
+net of cost by using $\Gamma_i(1) - c$ for the treated term.
+
+--
+
+- An average of i.i.d. terms $\psi_i$, so the standard error is the
+  influence-function form $\widehat{\text{SE}} = \hat\sigma_\psi / \sqrt{n}$.
+- Lets you build a **league table**: score treat-none, treat-all, the oracle,
+  the plug-in, and the tree on one common yardstick, with SEs.
+
+--
+
+.highlight-box[
+One catch. If you score a *learned* policy on the data that trained it,
+$\hat V(\hat\pi)$ is optimistic: the rule adapted to that noise. Cross-fit.
+]
+
+<a href="#ope-derivation" class="nav-btn">influence function + cross-fit</a>
+
+---
+
+name: naive-trap-main
+
+# The Naive Trap, Live
+
+Same depth-2 tree, two ways to value it: on its own training scores, versus on
+a held-out fold whose scores it never saw.
+
+```{r trap-table, echo=FALSE}
+tibble(
+  evaluation = c("naive: same data", "honest: held-out fold"),
+  `tree gain over treat-none` = c(naive_gain, honest_tree_gain)
+) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.highlight-box[
+The naive number (`r sprintf("%.2f", naive_gain)`) overstates the honest one
+(`r sprintf("%.2f", honest_tree_gain)`). That gap is pure optimism: the tree
+fit the noise in the scores it was trained on. A held-out evaluation, or
+$K$-fold cross-fit, removes it.
+]
+
+The exercise builds the full 5-fold cross-fit. <a href="#hte-dgp" class="nav-btn">DGP code</a>
+
+---
+
+name: league-main
+
+# The League Table (Honest)
+
+Off-policy values on a held-out fold, as gains over treat-none, net of cost.
+
+```{r league-table, echo=FALSE}
+league |>
+  transmute(policy,
+            `gain vs none` = round(gain, 3),
+            SE = round(se, 3),
+            `share treated` = round(share, 3)) |>
+  knitr::kable(format = "html")
+```
+
+--
+
+.small[
+- **treat-all** pays the cost everywhere: gain
+  `r sprintf("%.2f", league$gain[league$policy=="treat all"])`, the weakest
+  non-trivial policy.
+- the infeasible **oracle** rule $\tau > c$ and the **plug-in** land near
+  `r sprintf("%.2f", league$gain[league$policy=="oracle"])`.
+- the **depth-2 tree** matches them at
+  `r sprintf("%.2f", honest_tree_gain)`, within one SE of the oracle, using
+  just three interpretable splits.
+]
+
+--
+
+.blue-box[
+The interpretable rule loses almost nothing to the infeasible oracle here, and
+beats treat-all by about
+`r sprintf("%.2f", league$gain[league$policy=="depth-2 tree"] - league$gain[league$policy=="treat all"])`
+trips per driver net of cost. That is the case for policy learning over
+blanket rollout.
+]
+
+---
+
+name: failure-modes-main
+
+# When Policy Learning Breaks
+
+.small[
+| Failure | Symptom | What to do |
+|---|---|---|
+| Bad nuisances | DR score variance explodes; wild $\hat V$ | check overlap, trim propensities; DR fixes first-order error, not gross misspecification |
+| Naive evaluation | learned policy "beats" the oracle on its own data | cross-fit or honest split, always |
+| Over-rich $\Pi$ | deep tree, slow regret, no interpretability | depth 2 default; exact search cost grows fast with depth |
+| Boundary-heavy DGP | small honest gain, wide SEs | report the SE; no rule separates much from treat-all |
+]
+
+--
+
+.highlight-box[
+Interview framing: policy learning is not "predict $\tau$ then threshold". It
+is "optimize deployment welfare directly on doubly-robust scores, over a class
+you can actually ship, and evaluate it honestly with cross-fitting".
+]
+
+---
+
+name: m7-interview-questions
+
+# Interview Questions
+
+.small[
+| Question | Core of a strong answer |
+|---|---|
+| "We have a good CATE model. Why not just push when $\hat\tau > c$?" | Plug-in inherits regularization bias at the boundary and optimizes MSE, not welfare. Learn the rule on doubly-robust scores: Neyman-orthogonal, corrects first-order nuisance error. |
+| "Why restrict to a depth-2 tree instead of the best possible rule?" | Regret is against the best rule in the class and improves as VC dimension shrinks; a shallow tree converges fast and is interpretable, auditable, deployable. Restriction is a feature. |
+| "How do you know the deployed policy is actually good?" | Off-policy DR value estimate with SEs, cross-fitted so the policy is never scored on its training data. Report gain over treat-all and treat-none. |
+| "Your policy beat the oracle in the eval. Believe it?" | No. That is the optimism of same-data evaluation. Cross-fit; the honest value drops below the oracle. |
+| "The gain over treat-all is tiny. So what?" | Most units may sit near $\tau = c$; then no rule separates much value. Report the SE, and weigh interpretability and cost savings, not just the point estimate. |
+]
+
+---
+
+# Going Deeper
+
+.small[
+| Paper | What it adds |
+|---|---|
+| Athey and Wager (2021), *Econometrica* | The framework on these slides: EWM with doubly-robust scores, the $\sqrt{\text{VC}/n}$ regret bound, observational-data guarantees. |
+| Kitagawa and Tetenov (2018), *Econometrica* | Empirical welfare maximization from experimental data; the original regret-based treatment-choice result. |
+| Zhou, Athey and Wager (2023), *Operations Research* | Multi-action policy learning; the `policytree` exact-search algorithm and its optimization. |
+| Wager and Athey (2018), *JASA* | The causal forest supplying $\hat\tau$ and $\hat\mu$ for the scores. |
+| Hirano and Porter (2009), *Econometrica* | Asymptotic optimality of treatment rules; the decision-theoretic backdrop. |
+]
+
+**This closes the arc:** estimand (M1-3), design (M4-5), heterogeneity (M6),
+deployment (M7). Module 8 returns to panels with matrix completion.
+
+**Drill:** `exercise.R` fits the tree, hand-builds the 5-fold cross-fitted DR
+value estimator, and shows the optimism gap plus the honest league table.
+
+---
+
+class: center, middle, inverse
+
+# Backup Slides
+
+---
+
+name: aipw-derivation
+
+# Backup: The AIPW Score and Double Robustness
+
+.small[
+The score for arm $w$ is an outcome-model prediction plus an
+inverse-propensity-weighted residual:
+
+$$\Gamma_i(w) = \hat\mu_w(X_i) +
+\frac{\mathbb{1}\{W_i = w\}}{\hat e_w(X_i)}\big(Y_i - \hat\mu_w(X_i)\big).$$
+
+**Unbiased if the propensity is right.** Take $E[\cdot \mid X_i]$ with the true
+$e_w$: the residual term has mean $e_w \cdot E[Y - \mu_w \mid X, W = w] / e_w$,
+so even a wrong $\hat\mu_w$ is corrected back to $E[Y(w) \mid X_i]$.
+
+**Unbiased if the outcome model is right.** If $\hat\mu_w = \mu_w$, the residual
+has conditional mean zero regardless of $\hat e_w$, leaving $\mu_w(X_i)$.
+
+So the score is consistent if *either* nuisance is correct: double robustness.
+More: the value estimate is **Neyman-orthogonal**, its first-order derivative
+in each nuisance is zero, so small nuisance errors do not bias welfare. That is
+why we learn the policy on $\Gamma$ rather than on $\hat\tau$ directly.
+
+`grf` construction from the causal forest: with marginal fit $\hat m(x)$,
+effect $\hat\tau(x)$, propensity $\hat e$,
+$\hat\mu_1 = \hat m + (1-\hat e)\hat\tau$ and
+$\hat\mu_0 = \hat m - \hat e\hat\tau$.
+]
+
+<a href="#dr-scores-main" class="nav-btn-br">← back</a>
+
+---
+
+name: regret-detail
+
+# Backup: Regret, VC, and the Pointwise Impossibility
+
+.small[
+$$R(\hat\pi) = V(\pi^\star_\Pi) - V(\hat\pi)
+= O_p\!\left(\sqrt{\tfrac{\text{VC}(\Pi)}{n}}\right).$$
+
+The rate comes from a uniform bound on the empirical welfare process over
+$\Pi$: with DR scores the objective is a sum of mean-zero-error terms, and its
+supremum over a class of VC dimension $d$ deviates from the truth by
+$O_p(\sqrt{d/n})$. Depth $L$ trees on $p$ covariates have VC dimension growing
+with the number of leaves, so shallow trees give the tightest bounds.
+
+**Utilitarian, not pointwise.** No estimator recovers the pointwise-optimal
+rule from finite data: near $\tau(x) = c$ you cannot resolve the sign of
+$\tau(x) - c$. But the misclassified units there have $|\tau(x) - c|$ small, so
+they cost little welfare. Regret weights each mistake by exactly that value
+gap, so it downweights the unavoidable errors and rewards getting the
+high-stakes regions right.
+
+**Reading the bound for practice.** Doubling $n$ shrinks regret by $\sqrt 2$;
+halving VC dimension (depth 3 to depth 2) shrinks it by the same factor and
+buys interpretability. This is why the deployment-constrained class is not a
+compromise: it is often the statistically preferable choice too.
+]
+
+<a href="#ewm-main" class="nav-btn-br">← back</a>
+
+---
+
+name: ope-derivation
+
+# Backup: The DR Value Estimator and Cross-Fitting
+
+.small[
+For a fixed policy $\pi$, the value estimator averages per-unit influence
+terms:
+
+$$\hat V(\pi) = \frac{1}{n}\sum_i \psi_i, \qquad
+\psi_i = \Gamma_i(0) + \pi(X_i)\big(\Gamma_i(1) - \Gamma_i(0)\big).$$
+
+Since $E[\Gamma_i(w) \mid X_i] = E[Y(w) \mid X_i]$, we have
+$E[\psi_i] = V(\pi)$, and because the $\psi_i$ are i.i.d.,
+$\widehat{\text{SE}} = \hat\sigma_\psi / \sqrt{n}$. Comparisons of two policies
+use the paired differences $\psi_i^{(a)} - \psi_i^{(b)}$, whose SE is usually
+much smaller than the two marginal SEs (the nuisance noise cancels).
+
+**Why cross-fit for a learned $\pi$.** If $\hat\pi$ is fit on the same scores
+used to evaluate it, $\psi_i$ and $\hat\pi$ are dependent, and $E[\psi_i]$ no
+longer equals $V(\hat\pi)$: the estimate is optimistic. $K$-fold cross-fit
+restores independence:
+
+1. fold $k$ held out; fit nuisances and learn $\hat\pi_{-k}$ on the other folds;
+2. score fold $k$ with DR scores built from the *training-fold* nuisances;
+3. evaluate $\hat\pi_{-k}$ on fold $k$; pool the held-out $\psi_i$.
+
+Each held-out unit is scored by a policy and nuisances that never saw it, so
+the pooled average is honest. The exercise implements exactly this loop.
+]
+
+<a href="#ope-main" class="nav-btn-br">← back</a>
+
+---
+
+name: depth-detail
+
+# Backup: Depth Trade-Offs and Exact Search
+
+.small[
+`policy_tree` solves an **exact** optimization: over all axis-aligned trees of
+depth $L$, find the one maximizing $\sum_i \Gamma_i(\pi(X_i))$. Unlike greedy
+CART it does not split one node at a time; it globally optimizes, so the tree
+is the true welfare maximizer in the depth $L$ class.
+
+The price is combinatorial cost. Exact search scales with the number of
+candidate split points across covariates, and grows sharply with depth:
+
+| Depth | Leaves | Splits | Typical use |
+|---|---|---|---|
+| 1 | 2 | 1 | one-variable rule, sanity check |
+| 2 | 4 | 3 | practical default, interpretable |
+| 3 | 8 | 7 | slow on wide data, rarely worth it |
+
+Practical guidance:
+
+- Start at depth 2. On $n = 6000$ with four covariates it fits in seconds.
+- Coarsen continuous covariates (`policytree` supports pre-binning) to speed
+  the search without meaningful welfare loss.
+- If depth-3 barely beats depth-2 on the cross-fitted value, keep depth 2:
+  cheaper, faster, and lower regret by the VC argument.
+]
+
+<a href="#fit-tree-main" class="nav-btn-br">← back</a>
+
+---
+
+name: hte-dgp
+
+# Backup: The HTE DGP
+
+.small[
+```{r dgp-show, eval=FALSE}
+make_hte_data <- function(n = 6000, seed = 42) {
+  set.seed(seed)
+  tibble(
+    density  = runif(n),                        # city density percentile
+    tenure   = pmin(rexp(n, 1 / 18), 90),       # months on platform
+    peak_shr = rbeta(n, 2, 3),                  # share of hours in peak
+    rating   = pmin(pmax(rnorm(n, 4.7, 0.2), 3.5), 5),  # nuisance covariate
+    w        = rbinom(n, 1, 0.5),               # randomized push, e = 0.5
+    tau      = 1.5 * density - 0.02 * tenure + 2.0 * density * peak_shr,
+    y        = 10 + 5 * density + 0.05 * tenure + 3 * peak_shr +
+               tau * w + rnorm(n, 0, 2)         # weekly completed trips
+  )
+}
+```
+
+- Shared with Module 6, so $\hat\tau$ and the league table are comparable
+  across the two decks.
+- True effect $\tau(x)$ rises with density and peak share, falls with tenure;
+  `rating` has no effect (a decoy the tree should ignore).
+- Cost $c = 0.6$ per push. True optimal share treated, $\tau > 0.6$, is about
+  `r sprintf("%.0f%%", 100*opt_share)`.
+]
+
+<a href="#naive-trap-main" class="nav-btn-br">← back</a>
