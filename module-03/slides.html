@@ -102,7 +102,7 @@ class: center, middle, inverse, title-slide
 &lt;tr&gt;&lt;td&gt;5&lt;/td&gt;&lt;td&gt;&lt;a href="../module-05/slides.html"&gt;Synthetic DiD and the Bridge from SC to DiD&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;6&lt;/td&gt;&lt;td&gt;&lt;a href="../module-06/slides.html"&gt;Causal Forest: Honest Splitting and Asymptotics&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;7&lt;/td&gt;&lt;td&gt;&lt;a href="../module-07/slides.html"&gt;Policy Learning: From HTE to Deployment Rules&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
-&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;Matrix Completion and the Modern Panel Toolbox&lt;/td&gt;&lt;td&gt;upcoming&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;&lt;a href="../module-08/slides.html"&gt;Matrix Completion and the Modern Panel Toolbox&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;/table&gt;
 
 ---
@@ -128,7 +128,11 @@ are weak and Rambachan-Roth bound the damage. Here is the machinery.
 --
 
 **Running application:** the single-cohort event study carved out of the
-Module 1-2 rollout: cohort `\(g = 25\)` versus six never-treated cities.
+Module 1-2 rollout: cohort `\(g = 25\)` versus six never-treated cities. Outcome:
+log completed trips (read: engagement or revenue per customer in a retail
+setting). The rollout was never randomized, so parallel trends is an
+assumption you defend, not a design you can lean on; this module is how
+you quantify exactly how much you are leaning on it.
 
 ---
 
@@ -298,6 +302,12 @@ large is plausible, using the observed pre-period wiggle as the yardstick.
 `\(\bar M^{\ast} = 1.5\)` reads directly: the post violation would have to be 1.5x
 the worst pre one.
 ]
+
+--
+
+In a decision memo for a non-technical owner, the breakdown value collapses
+to one sentence: "the effect survives unless post-launch confounding is
+1.5x the worst pre-period wiggle."
 
 &lt;a href="#breakdown-derivation" class="nav-btn"&gt;reading it off the CI path&lt;/a&gt;
 
@@ -589,6 +599,7 @@ name: m3-interview-questions
 | "Smoothness or relative magnitudes?" | `\(\Delta^{SD}\)` if you fear a smooth trend (it extrapolates and corrects a linear one); `\(\Delta^{RM}\)` if you only assume the post violation is no worse than the pre. Match the restriction to the confounder. |
 | "A linear confound with a clean breakdown value under `\(\Delta^{SD}\)`: trust it?" | Only if a *linear* trend is truly your worry: `\(\Delta^{SD}\)` nets linear trends out, so its `\(M^{\ast}\)` is blind to them. Check `\(\Delta^{RM}\)`, which reacts. |
 | "How does this scale to our launches?" | Few clusters cap the event-study width (rank of `\(\Sigma\)`); validate the original CI; report breakdown values per horizon since later horizons are more fragile. |
+| "So is the result robust or not? I need a yes or no." | Translate the breakdown value into one sentence: the effect survives unless post-launch confounding is 1.5x the worst pre-period wiggle. Then name the candidate shocks and say whether one that large is plausible. |
 ]
 
 ---
