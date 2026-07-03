@@ -92,7 +92,7 @@ class: center, middle, inverse, title-slide
 &lt;tr&gt;&lt;td&gt;5&lt;/td&gt;&lt;td&gt;&lt;a href="../module-05/slides.html"&gt;Synthetic DiD and the Bridge from SC to DiD&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;6&lt;/td&gt;&lt;td&gt;&lt;a href="../module-06/slides.html"&gt;Causal Forest: Honest Splitting and Asymptotics&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;tr&gt;&lt;td&gt;7&lt;/td&gt;&lt;td&gt;&lt;a href="../module-07/slides.html"&gt;Policy Learning: From HTE to Deployment Rules&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
-&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;Matrix Completion and the Modern Panel Toolbox&lt;/td&gt;&lt;td&gt;upcoming&lt;/td&gt;&lt;/tr&gt;
+&lt;tr&gt;&lt;td&gt;8&lt;/td&gt;&lt;td&gt;&lt;a href="../module-08/slides.html"&gt;Matrix Completion and the Modern Panel Toolbox&lt;/a&gt;&lt;/td&gt;&lt;td&gt;done&lt;/td&gt;&lt;/tr&gt;
 &lt;/table&gt;
 
 ---
@@ -172,9 +172,18 @@ name: staggered-dgp-main
 # The Application: Staggered Zone-Notification Rollout
 
 30 cities, 60 weeks. Cohorts adopt at week 15, 25, 35; six cities never do.
-Outcome `\(y\)`: log completed trips.
+Outcome `\(y\)`: log completed trips (read: engagement or revenue per customer
+in a retail setting).
 
 &lt;img src="slides_files/figure-html/dgp-plot-1.png" style="display: block; margin: auto;" /&gt;
+
+.tiny[
+Units here are cities, which keeps cross-unit interference plausibly small.
+If units were sellers or customers inside one marketplace (shared
+inventory, cannibalization, reallocation), spillovers would contaminate
+not-yet-treated controls, and no staggered-DiD estimator fixes that; unit
+choice is the first identification decision.
+]
 
 &lt;a href="#staggered-dgp" class="nav-btn"&gt;DGP code&lt;/a&gt;
 
@@ -519,6 +528,36 @@ territory.
 
 ---
 
+name: design-rollout-main
+
+# Design the Rollout: Reserve a Never-Treated Slice
+
+The sign-reversal demo above is not just a diagnosis, it is an argument you
+can make **before** a staggered rollout ships. If you are consulted on the
+design, argue to hold out a slice of markets or cohorts, the panel analogue
+of a global holdout in an A/B test.
+
+--
+
+- A platform-wide launch cannot be a customer-level experiment, but **which
+  cities wait** is still a design choice you can make.
+- Even a small never-treated set restores clean comparisons for every
+  estimator in this course, not just TWFE: it anchors weight away from
+  forbidden 2x2s here, and it is the control group Callaway-Sant'Anna and
+  BJS need in Module 2.
+- The quantified case is the demo above: with 6 never-treated cities the
+  panel resists a full sign flip; remove them and it does not.
+
+--
+
+.blue-box[
+"Ship everywhere" is an ops default, not a technical requirement. A held-out
+slice costs some short-run coverage and buys identification for the entire
+toolbox that follows.
+]
+
+---
+
 name: diagnostics-main
 
 # Practitioner Checklist for Any Staggered Rollout
@@ -562,6 +601,7 @@ name: m1-interview-questions
 | "When would you still trust TWFE?" | Non-staggered designs; effects constant in event time and across cohorts; or when forbidden-comparison weight is negligible and you can defend effect stability. |
 | "Can TWFE flip the sign of a true positive effect?" | Yes: strong effect dynamics make forbidden 2x2s increasingly negative, and they can dominate. Demonstrated with all `\(ATT(g,t) &gt; 0\)` and TWFE `\(&lt; 0\)`. |
 | "What determines the Bacon weights?" | Group sizes and treatment-share variance `\(\bar D(1-\bar D)\)`: mid-panel cohorts dominate. Design, not effect size or precision. |
+| "Ops staggered the launch so every city eventually got it. That is even better than a holdout, right?" | No: with no never-treated slice, late cohorts get compared against already-treated cities, and TWFE can even flip the sign of a true positive effect (this deck's demo). Reserve a never-treated holdout before the launch ships. |
 ]
 
 ---
