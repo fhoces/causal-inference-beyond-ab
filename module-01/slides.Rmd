@@ -585,7 +585,7 @@ robust estimators are not optional.
 
 --
 
-At Amazon scale (staggered feature launches across marketplaces, fulfillment
+At platform scale (staggered feature launches across marketplaces, fulfillment
 centers, product categories), staggering is the *default*, not the edge case.
 
 ---
