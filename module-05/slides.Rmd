@@ -528,6 +528,16 @@ rs |>
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- A handful of metros receive next-day delivery upgrades in the same quarter; this is the multi-treated-unit case where synthetic control's single-unit logic no longer applies directly.
+- SDID reweights the donor metros (those still on two-day) to match the pre-launch order trend of the treated group, relaxing the strict parallel-trends assumption that DiD requires.
+- It also downweights remote pre-periods where common-trend assumptions are least credible, keeping identification anchored on the recent pre-launch window.
+- The unit weights reveal which donor metros anchor the counterfactual; metros with similar pre-launch order trajectories and demand density receive the most weight.
+- SDID sits between DiD (fully trusting parallel trends) and SC (demanding perfect pre-period fit), and is preferred when treated metros are few but more than one.
+
+---
+
 name: rideshare-results-main
 
 # Factor Structure: SDID Recovers, DiD Does Not

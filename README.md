@@ -49,6 +49,7 @@ California Prop 99 SC), the canonical paper's data is used. The methods
 transfer directly to the standard platform settings: staggered feature
 rollouts, geo-level policy changes, fee or pricing changes in a single
 market, and targeted incentives.
+Every module also carries a parallel online-retail example. The panel-methods modules (1-5, 8) use a staggered next-day-delivery rollout across metro areas; the HTE and policy modules (6-7) use a randomized paid-membership signup discount.
 
 ## Structure
 

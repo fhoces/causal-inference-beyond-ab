@@ -477,6 +477,16 @@ outcome model and the propensity into a doubly-robust average: consistent if
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- The randomized signup discount is the experiment: $W_i$ = offered discount, $Y_i$ = 12-month spend, $X_i$ includes account tenure, pre-period spend, primary purchase category, and device type.
+- Causal forest estimates $\hat\tau(x)$: the conditional average treatment effect of the signup offer varies substantially across the covariate space.
+- Honest splitting uses separate subsamples for tree building and leaf estimation, preventing the winner's-curse inflation that occurs when the same data selects the subgroup boundaries and evaluates the treatment effect within them.
+- High pre-period spend and long tenure both moderate the offer's effect: already-heavy members may join regardless of the discount (never-takers) and respond little at the margin.
+- The per-customer $\hat\tau(x)$ estimate is the input to the policy-learning problem in Module 7.
+
+---
+
 name: cate-scatter-main
 
 # Does $\hat\tau(x)$ Track the Truth?

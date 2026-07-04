@@ -274,6 +274,8 @@ negative (Module 1's sign-reversal demonstration).</p>
 uniform band, and check robustness with a second estimator. If they agree,
 the staggering was handled; if they diverge, parallel trends or the control
 group is doing the work and you investigate before reporting.</p>
+<h2 id="the-same-problem-at-an-online-retailer">The same problem at an online retailer</h2>
+<p>In the delivery rollout panel, cohort $g$ is the set of metros upgraded to next-day delivery in quarter $g$. The quantity ATT(g,t) measures the average effect of the upgrade on orders per customer for cohort $g$ at calendar quarter $t$; it is defined relative to the untreated potential outcome for that cohort and period. Event-time aggregation, plotting the average ATT(g,t) by quarters since upgrade rather than by calendar quarter, traces the habit-formation dynamic directly: a rising event-study plot confirms that the delivery effect grows with exposure. Callaway-Sant'Anna and the other robust estimators compute ATT(g,t) using never-upgraded metros as the preferred comparison group, avoiding the forbidden comparison that inflates TWFE. Not-yet-upgraded metros are a valid control when the never-treated slice is thin, provided their pre-period trends are parallel to the treated cohort. Cross-cohort heterogeneity is a natural feature of the rollout: early-adopting metros are typically denser and more demand-active than later ones, so ATT(g,t) varies across cohorts even at the same event time. The ATT(g,t) surface captures this variation, while a single TWFE coefficient collapses it into a potentially misleading scalar.</p>
 <h2 id="references">References</h2>
 <ul>
 <li>Callaway, B. and Sant'Anna, P. (2021). Difference-in-differences with

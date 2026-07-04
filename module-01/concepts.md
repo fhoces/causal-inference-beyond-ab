@@ -157,6 +157,10 @@ strictly positive.
    gap.
 5. If the design is not staggered, say so and skip the ceremony.
 
+## The same problem at an online retailer
+
+A large online retailer upgrades metros from two-day to next-day delivery as new fulfillment centers open, staggering the rollout over several quarters. The resulting dataset is a metro-week orders panel with multiple adoption cohorts and a slice of metros that never receive the upgrade. This is exactly the staggered-adoption setting the module analyzes: TWFE on the panel uses already-upgraded metros as controls for late-adopting metros during the late cohorts' post periods, the forbidden comparison. The mechanism is habit formation: customers update their ordering behavior as they learn the reliability of the faster delivery promise, so effects grow with time since adoption rather than jumping to a fixed level at the upgrade date. Dynamic effects are precisely the condition under which the forbidden comparison biases TWFE. Early cohorts' growing effect gets subtracted from late cohorts' estimates, attenuating TWFE toward zero and potentially reversing its sign if the never-treated slice is small. Preserving a set of metros that never receive next-day delivery gives every estimator in this course a clean comparison group.
+
 ## References
 
 - Goodman-Bacon, A. (2021). Difference-in-differences with variation in

@@ -257,6 +257,10 @@ breakdown value, not a pre-test $p$.
    against the observed pre-period violation.
 5. Report the sensitivity plot, not just the pass/fail of a pre-test.
 
+## The same problem at an online retailer
+
+The retailer chose which metros to upgrade first based partly on demand growth projections, making the rollout order endogenous. High-growth metros would have seen rising orders even without next-day delivery; their pre-period order trend diverges from the never-upgraded control group before the upgrade ever occurs. This means parallel trends is suspect on its face, not merely a maintained assumption that goes untested. The Rambachan-Roth framework is the right tool. Rather than reporting a point estimate that requires parallel trends to hold exactly, the analyst bounds the post-period violation by a multiple of the worst pre-period divergence observed in the data. The resulting robust confidence set widens as the allowed violation grows, honest about the uncertainty introduced by the endogenous rollout order. The breakdown value gives the minimum pre-trend-relative violation that would make the estimated delivery effect statistically indistinguishable from zero, providing a transparent threshold for the reader to evaluate. Reporting both the TWFE point estimate and the robust sensitivity set turns an endogenously ordered rollout into a credible empirical study rather than an assertion that parallel trends holds by assumption.
+
 ## References
 
 - Rambachan, A. and Roth, J. (2023). A more credible approach to parallel

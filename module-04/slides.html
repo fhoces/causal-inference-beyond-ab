@@ -663,6 +663,16 @@ rides index (read: units sold or sessions per market in a retail setting).
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- A single flagship metro receives same-day delivery as a pilot; all other metros remain on two-day and form the donor pool for a synthetic control.
+- Pre-period fit minimizes the distance between the flagship's orders-per-capita series and a convex combination of donors, anchoring the synthetic counterfactual to observed pre-launch behavior.
+- Placebo-in-space: assign same-day status to each donor metro in turn; the flagship's post-launch gap is significant if it lies outside the distribution of placebo gaps.
+- The convex-hull constraint is a real concern if the flagship is the largest market by order volume: no convex combination of smaller donors can match its scale, and the estimator extrapolates rather than interpolates.
+- Pre-launch order levels are the natural balancing variables; donor metros whose order trajectories cannot match the flagship's scale receive near-zero synthetic-control weight.
+
+---
+
 name: geo-experiment-main
 
 # From Policy Evaluation to Geo Experiments

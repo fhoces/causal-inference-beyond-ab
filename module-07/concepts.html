@@ -247,6 +247,8 @@ removes.</p>
    $\tau(x) = c$, no policy separates much value from treat-all, and the honest
    gain is small with wide SEs. Report the SE, not just the point estimate.</li>
 </ol>
+<h2 id="the-same-problem-at-an-online-retailer">The same problem at an online retailer</h2>
+<p>The membership experiment's heterogeneous treatment effects become actionable through policy learning. Given a fixed promotional budget, the retailer must decide which customers to offer the signup discount. The goal is to maximize incremental membership revenue: the policy should direct offers toward customers whose spending would increase most because of membership, not toward customers who would join anyway at full price or who would not benefit even as members. The <code>policy_tree</code> function approximates this welfare-maximizing rule as a shallow decision tree, splitting on covariates such as tenure and pre-period spend to produce a rule that can be deployed without per-customer score lookup. Naive targeting on in-sample predicted uplift exploits noise: the customers with the highest $\hat\tau(x)$ in the training data often reflect overfitting, and their realized uplift at deployment is smaller. The doubly-robust AIPW score corrects for this in-sample optimism and provides a reliable estimate of the targeting policy's true lift, evaluated on a held-out test set. A fixed promo budget introduces a cost constraint that the policy must respect: the policy value calculation determines how many offers can be sent profitably and which customer segments should receive priority.</p>
 <h2 id="references">References</h2>
 <ul>
 <li>Athey, S. and Wager, S. (2021). Policy learning with observational data.

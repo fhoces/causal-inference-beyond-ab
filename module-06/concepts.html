@@ -265,6 +265,8 @@ cover.</p>
 <li>In simulation, validate RMSE and coverage, and show the honesty
    ablation.</li>
 </ol>
+<h2 id="the-same-problem-at-an-online-retailer">The same problem at an online retailer</h2>
+<p>The randomized signup discount provides a clean experimental setting for estimating heterogeneous treatment effects. Customers are randomized to receive a discount offer or to see the standard price; the outcome is 12-month spend. The causal forest takes account tenure, pre-period spend, primary purchase category, and device type as covariates and estimates the conditional average treatment effect of the signup offer across the covariate space. Honest splitting prevents the winner's-curse inflation that arises when the same data selects the subgroup boundaries and evaluates the treatment effect within them: separate subsamples for tree construction and leaf-level estimation give asymptotically valid pointwise intervals. The forest reveals that the signup offer's effect on spend varies substantially: customers with high pre-period spend and long tenure respond little, because heavy members are likely to join regardless of the discount, while newer or lighter customers show larger effects at the margin. These conditional estimates feed directly into the policy-learning problem in Module 7, where the goal is to deploy a targeting rule that allocates the discount efficiently across the customer base.</p>
 <h2 id="references">References</h2>
 <ul>
 <li>Wager, S. and Athey, S. (2018). Estimation and inference of heterogeneous

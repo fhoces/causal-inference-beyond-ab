@@ -478,6 +478,16 @@ Always check the coefficient count against the cluster count.
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- Metros were upgraded earliest where demand growth was strongest, making the rollout order endogenous: parallel trends is suspect on its face.
+- High-growth metros would have seen rising orders even without next-day delivery; the pre-period trend in early-adopting metros diverges from the never-upgraded group before the rollout begins.
+- Rambachan-Roth: bound the post-period violation by a multiple $\bar{M}$ of the worst pre-period divergence; the robust confidence set for the delivery effect widens with $\bar{M}$ rather than collapsing to a false point estimate.
+- The breakdown value gives the minimum pre-trend-relative violation that would make the delivery effect statistically indistinguishable from zero.
+- Reporting the robust confidence set alongside the TWFE point estimate turns an endogenously ordered rollout into a credible study, rather than a claim that parallel trends holds by assumption.
+
+---
+
 name: event-study-main
 
 # The Event Study

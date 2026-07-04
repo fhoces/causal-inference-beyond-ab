@@ -127,6 +127,16 @@ to push, and to whom?
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- The business decision: given a fixed promotional budget, which customers receive the signup discount? The goal is to maximize incremental membership revenue, not merely the average discount effect.
+- `policy_tree` turns `\(\hat\tau(x)\)` into a shallow decision tree splitting on tenure and pre-period spend, producing a deployable targeting rule without requiring a per-customer score lookup.
+- Naive targeting on in-sample uplift is overoptimistic: the highest-predicted decile in the training data exploits noise and is rarely the highest-uplift decile at deployment.
+- The doubly-robust AIPW score gives an honest off-policy value estimate: it corrects the plug-in rule's in-sample optimism and provides a reliable lift projection for the targeting policy.
+- A fixed promo budget acts as a cost constraint; the policy's welfare is evaluated on a held-out test set, not on the data used to learn the rule.
+
+---
+
 name: problem-main
 
 # The Policy Learning Problem

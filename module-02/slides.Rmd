@@ -235,6 +235,16 @@ business reasons, not randomized.
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- Cohort $g$ = the set of metros upgraded to next-day delivery in quarter $g$; $\text{ATT}(g,t)$ measures the delivery effect for that cohort at calendar quarter $t$.
+- Event-time aggregation of $\text{ATT}(g,t)$ traces the habit-formation path: a rising event-study plot confirms that effects grow with months since the upgrade.
+- The preferred control group is never-upgraded metros (still on two-day delivery); not-yet-upgraded metros are a valid but noisier alternative when the never-treated slice is small.
+- Cross-cohort heterogeneity (early metros differ in demand density from late metros) is captured naturally by the ATT(g,t) surface rather than collapsed into a single TWFE number.
+- Callaway-Sant'Anna or BJS avoids the forbidden comparison that biases TWFE in this panel, giving a clean estimate for each cohort-quarter cell.
+
+---
+
 # What a Fix Must Do
 
 Every heterogeneity-robust estimator obeys one rule: **only clean

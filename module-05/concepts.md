@@ -224,6 +224,10 @@ trusted.
   with the timing machinery of Modules 1 and 2, and for irregular missingness
   you reach for matrix completion (Module 8).
 
+## The same problem at an online retailer
+
+When a handful of metros receive next-day delivery upgrades in the same quarter, the single-unit synthetic control no longer applies directly and a full DiD requires parallel trends that the endogenous rollout order makes suspect. Synthetic DiD reweights the donor metros (those still on two-day delivery) to match the pre-launch order trend of the treated group, relaxing the strict parallel-trends assumption that DiD requires. Simultaneously, it downweights remote pre-periods where the common-trend assumption is least credible, concentrating identification on the recent pre-launch window. The unit weights that SDID produces reveal which donor metros anchor the counterfactual: metros with order trajectories and demand characteristics similar to the treated cohort receive the most weight, while dissimilar metros receive near-zero weight. In contrast to pure synthetic control, SDID accommodates multiple treated units naturally, and in contrast to pure DiD it does not assume that untreated metros follow the same trend as treated ones unconditionally. When the treated group is small but larger than one, SDID occupies the right position in the method-choice space.
+
 ## References
 
 - Arkhangelsky, D., Athey, S., Hirshberg, D. A., Imbens, G. W. and Wager, S.

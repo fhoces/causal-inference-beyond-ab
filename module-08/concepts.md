@@ -326,6 +326,12 @@ about the mechanism connecting treatment to the long-run outcome.
   can defend surrogacy and comparability qualitatively; neither is testable
   from the experiment alone.
 
+## The same problem at an online retailer
+
+The metro-week orders panel with a staggered block of treated cells is the natural matrix-completion setting from the delivery rollout. The treated cells, metro-upgrade-week combinations where the metro has already received next-day delivery, have missing untreated potential outcomes; matrix completion imputes those missing entries using the panel's low-rank structure without requiring a clean donor pool or homogeneous trends across metros. The nuclear-norm penalty shrinks the completed matrix toward a low-rank factorization, treating each metro's order trajectory as a noisy draw from a small number of latent demand factors shared across the metro network. This relaxes both the convex-hull requirement of synthetic control and the parallel-trends requirement of DiD, making it attractive when neither assumption is defensible.
+
+In the capstone decision tree, the two running examples point to different branches of the method-choice diagram. Many staggered treated metros points to Callaway-Sant'Anna or BJS imputation; a single treated metro points to synthetic control or SDID; questions about which customers benefit from the signup discount point to causal forest and then to policy learning. Matrix completion covers the staggered-panel branch when the panel is large and the low-rank structure is plausible. Both examples have now appeared across every module of this course, illustrating that the choice of method depends on the data structure and identification strategy, not on which application is more familiar.
+
 ## References
 
 - Athey, S., Bayati, M., Doudchenko, N., Imbens, G. and Khosravi, K.

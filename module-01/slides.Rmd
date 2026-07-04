@@ -226,6 +226,16 @@ choice is the first identification decision.
 
 ---
 
+# The Same Problem at an Online Retailer
+
+- A large online retailer upgrades metros from two-day to next-day delivery as new fulfillment centers open; the panel is metro-week orders, with three adoption cohorts and a slice of never-upgraded metros.
+- TWFE on this panel uses already-upgraded metros as controls for late-upgrading metros during the late cohorts' post periods: the forbidden comparison.
+- Delivery effects are dynamic: customers update their ordering behavior as they learn the reliability of the faster promise, so effects grow with time since adoption.
+- The forbidden comparison subtracts the early cohort's growing effect from the late cohort's estimate, attenuating TWFE toward zero.
+- Holding out a slice of metros that never receive next-day delivery preserves the clean comparison group that every estimator in this course relies on.
+
+---
+
 name: scenarios-main
 
 # Three Heterogeneity Scenarios, One DGP

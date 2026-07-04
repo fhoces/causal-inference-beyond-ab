@@ -240,6 +240,10 @@ $1.59$ with a 95% interval $[1.11, 2.07]$ that covers the truth. The ordering
 (gsynth best, ASCM next, plain SC worst) is the general lesson: when the panel is
 low-rank and the treated unit is near the hull edge, model the factors.
 
+## The same problem at an online retailer
+
+A single flagship metro receives same-day delivery as a pilot before any other markets. All remaining metros, still on two-day delivery, form the donor pool for a synthetic control. Pre-period fit minimizes the distance between the flagship's orders-per-capita series and a convex combination of donors on the same metric, anchoring the synthetic counterfactual to observed pre-launch behavior. The synthetic control then predicts what the flagship's orders would have been in the post-launch period if it had remained on two-day; the gap between actual and synthetic orders is the estimated delivery effect. Inference uses placebo-in-space: same-day status is assigned to each donor metro in turn, and the flagship's gap is judged significant if it lies outside the distribution of placebo gaps. The convex-hull constraint is a genuine concern in this setting because the flagship metro may be the largest market by order volume; if no convex combination of smaller donor metros can match its pre-period scale, the estimator extrapolates rather than interpolates, and the pre-period fit will be poor. Donor selection should exclude metros that are too dissimilar in baseline order levels to contribute usefully to the synthetic combination.
+
 ## References
 
 - Abadie, A., Diamond, A. and Hainmueller, J. (2010). Synthetic control methods
