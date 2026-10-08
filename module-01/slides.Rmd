@@ -675,6 +675,23 @@ Sun-Abraham, BJS imputation, dCDH.
 replicates `bacon()` to 1e-14.
 
 ---
+name: course-map-end
+
+# Course Map
+
+<table>
+<tr><th>#</th><th>Module</th><th>Status</th></tr>
+<tr><td>1</td><td>TWFE Diagnosed: Goodman-Bacon and the Zoo of 2x2s <i>(just finished)</i></td><td>done</td></tr>
+<tr><td><b>2</b></td><td><b><a href="../module-02/slides.html">Heterogeneity-Robust DiD: CS, SA, BJS, dCDH</a></b></td><td>next</td></tr>
+<tr><td>3</td><td><a href="../module-03/slides.html">Honest DiD: Sensitivity Bounds for Parallel Trends</a></td><td>done</td></tr>
+<tr><td>4</td><td><a href="../module-04/slides.html">Synthetic Control: Estimator, Inference, Variants</a></td><td>done</td></tr>
+<tr><td>5</td><td><a href="../module-05/slides.html">Synthetic DiD and the Bridge from SC to DiD</a></td><td>done</td></tr>
+<tr><td>6</td><td><a href="../module-06/slides.html">Causal Forest: Honest Splitting and Asymptotics</a></td><td>done</td></tr>
+<tr><td>7</td><td><a href="../module-07/slides.html">Policy Learning: From HTE to Deployment Rules</a></td><td>done</td></tr>
+<tr><td>8</td><td><a href="../module-08/slides.html">Matrix Completion and the Modern Panel Toolbox</a></td><td>done</td></tr>
+</table>
+
+---
 
 class: center, middle, inverse
 
